@@ -53,7 +53,6 @@ String icon_names[ICON_COUNT] = {
 // ----------------------------------------------------------------------------------------------------------
 char ssid[] = WIFI_SSID;
 char pass[] = WIFI_PASSWORD;
-int status = WL_IDLE_STATUS;
 WiFiClient client;
 
 // ----------------------------------------------------------------------------------------------------------
@@ -151,7 +150,7 @@ void animate_wait(void *p) {
 }
 
 // ----------------------------------------------------------------------------------------------------------
-// Local time
+// Time
 // ----------------------------------------------------------------------------------------------------------
 void printLocalTime() {
     struct tm timeinfo;
@@ -159,7 +158,13 @@ void printLocalTime() {
         Serial.println("Failed to obtain time");
         return;
     }
-    Serial.println(&timeinfo, "%A, %d %B %Y %H:%M:%S");
+    Serial.println(&timeinfo, "%A, %d %B %Y %H:%M:%S zone %Z %z");
+}
+
+void initTime() {
+    Serial.printf("Getting Network time\n");
+    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+    printLocalTime();
 }
 
 // ----------------------------------------------------------------------------------------------------------
@@ -308,11 +313,8 @@ void setup(void) {
     }
     Serial.printf("\n");
 
-    Serial.printf("Getting Network time\n");
-
     // Init and get the time
-    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-    printLocalTime();
+    initTime();
 
     xTaskCreatePinnedToCore(weather_task, "weather", 4096, NULL, 2, &task_weather, 0);
     // get_weather();
