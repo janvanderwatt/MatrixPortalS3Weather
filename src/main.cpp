@@ -400,13 +400,17 @@ void loop() {
         }
     }
 
-    matrix.setCursor(0, 0);
-    matrix.printf("%.1f", CURRENT_TEMP);
+    char temp_buffer[16];
+    snprintf(temp_buffer, sizeof(temp_buffer), "%.1f C", CURRENT_TEMP);
+    uint8_t temp_x = 32 - 3 * strlen(temp_buffer);
+    matrix.setCursor(temp_x, 1);
+    matrix.printf(temp_buffer);
+    matrix.drawCircle(temp_x + 6 * strlen(temp_buffer) - 10, 2, 1, matrix.color565(255, 255, 255));
 
-    matrix.setCursor(63 - 31, 63 - 8);
+    matrix.setCursor(32 - 5 * 3, 63 - 8);
     struct tm timeinfo;
     if (getLocalTime(&timeinfo)) {
-        matrix.printf("%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min);
+        matrix.printf("%02d%c%02d", timeinfo.tm_hour, timeinfo.tm_sec % 2 ? ':' : ' ', timeinfo.tm_min);
     }
 
     // matrix.drawCircle(x >> scale, y >> scale, r, colors[(x + y) % 8]);
