@@ -66,14 +66,9 @@ Adafruit_Protomatter matrix(
 
 Adafruit_LIS3DH accel = Adafruit_LIS3DH();
 
-#define N_COLORS 8
-#define BOX_HEIGHT 8
-#define N_GRAINS (BOX_HEIGHT * N_COLORS * 8)
-uint16_t colors[N_COLORS];
-
 uint32_t prevTime = 0; // Used for frames-per-second throttle
 
-GFXcanvas16 *top_canvas;
+GFXcanvas16 *top_canvas, *bottom_canvas;
 
 void err(int x) {
     uint8_t i;
@@ -104,8 +99,9 @@ const int daylightOffset_sec = 0;
 // #define SIMULATE_WEATHER_API
 // Use cityname, country code where countrycode is ISO3166 format.
 // E.g. "New York, US" or "London, GB"
-// String LOCATION = "Melbourne,%20AU";
-String LOCATION = "Langwarrin,%20AU";
+// String LOCATION = "Melbourne";
+String LOCATION = "Langwarrin";
+String FULL_LOCATION = LOCATION + ",%20AU";
 String openweather_token = OPENWEATHER_TOKEN;
 String UNITS = "metric"; // can pick 'imperial' or 'metric' as part of URL query
 const uint32_t WEATHER_INTERVAL_MIN = 10;
@@ -114,11 +110,11 @@ float CURRENT_TEMP, CURRENT_WIND, CURRENT_HUMIDITY;
 String CURRENT_ICON;
 
 //  Set up from where we'll be fetching data
-String DATA_SOURCE = "http://api.openweathermap.org/data/2.5/weather?q=" + LOCATION + "&units=" + UNITS + "&appid=" + openweather_token;
+String DATA_SOURCE = "http://api.openweathermap.org/data/2.5/weather?q=" + FULL_LOCATION + "&units=" + UNITS + "&appid=" + openweather_token;
 
-const uint8_t ICON_COUNT = 9, INDICATOR_COUNT = 3;
+const uint8_t ICON_COUNT = 9, INDICATOR_COUNT_TOP = 3, INDICATOR_COUNT_BOTTOM = 2;
 Adafruit_ImageReader img_reader(LittleFS);
-Adafruit_Image img, icon[ICON_COUNT][2], ind[INDICATOR_COUNT], *current_icon = NULL, *previous_icon = NULL;
+Adafruit_Image img, icon[ICON_COUNT][2], ind_top[INDICATOR_COUNT_TOP], *current_icon = NULL, *previous_icon = NULL;
 String icon_names[ICON_COUNT] = {
     "01",
     "02", // "few clouds"
@@ -134,15 +130,20 @@ String icon_names[ICON_COUNT] = {
 // ----------------------------------------------------------------------------------------------------------
 // Weather Icons and Indicators
 // ----------------------------------------------------------------------------------------------------------
-String indicator_names[INDICATOR_COUNT] = {
+String indicator_names[INDICATOR_COUNT_TOP] = {
     "temp",
     "wind",
     "humidity"};
 
-enum Indicator {
+enum TopIndicator {
     IndTemperature = 0,
     IndWind = 1,
     IndHumidity = 2
+};
+
+enum BottomIndicator {
+    IndTime = 0,
+    IndLocation = 1
 };
 
 struct IndicatorAttr
@@ -152,20 +153,28 @@ struct IndicatorAttr
     uint16_t pause_ms;
 };
 
-const int16_t WIDTH_TEMP = SCREEN_WIDTH, WIDTH_WIND = SCREEN_WIDTH, WIDTH_HUMIDITY = SCREEN_WIDTH;
-int16_t indicator_left_x = 0, total_top_w = 0;
+const uint16_t WIDTH_TEMP = SCREEN_WIDTH, WIDTH_WIND = SCREEN_WIDTH, WIDTH_HUMIDITY = SCREEN_WIDTH;
+int16_t indicator_left_x_top = 0, total_w_top = 0;
 
-IndicatorAttr indicator_info[INDICATOR_COUNT] = {
-    {.x = 0, .w = WIDTH_TEMP, .pause_ms = 5000},
-    {.x = 0, .w = WIDTH_WIND, .pause_ms = 3000},
-    {.x = 0, .w = WIDTH_HUMIDITY, .pause_ms = 2000},
-};
+IndicatorAttr indicator_info_top[INDICATOR_COUNT_TOP] = {
+    {.x = 0, .w = WIDTH_TEMP, .pause_ms = 15000},
+    {.x = 0, .w = WIDTH_WIND, .pause_ms = 5000},
+    {.x = 0, .w = WIDTH_HUMIDITY, .pause_ms = 3000}};
 
-uint64_t waiting_time;
+const uint16_t WIDTH_TIME = SCREEN_WIDTH, WIDTH_LOCATION = LOCATION.length() * 6 + SCREEN_WIDTH / 4;
+int16_t indicator_left_x_bottom = 0, total_w_bottom = 0;
+IndicatorAttr indicator_info_bottom[INDICATOR_COUNT_BOTTOM] = {
+    {.x = 0, .w = WIDTH_TIME, .pause_ms = 15000},
+    {.x = 0, .w = WIDTH_LOCATION, .pause_ms = 0}};
+
+uint64_t waiting_time_top, waiting_time_bottom;
 
 const uint8_t OFFSET_TEXT_TOP_Y = 2, OFFSET_IMG_TOP_Y = 0;
 const uint8_t OFFSET_IMG_MID_Y = 33;
-const uint8_t OFFSET_TEXT_BOTTOM_Y = 63 - 8;
+const uint8_t OFFSET_TEXT_BOTTOM_Y = 2;
+
+const uint8_t IND_WIDTH = 8, IND_HEIGHT = 10;
+const uint16_t CANVAS_Y_TOP = 0, CANVAS_Y_BOTTOM = SCREEN_HEIGHT - 1 - IND_HEIGHT;
 
 // ----------------------------------------------------------------------------------------------------------
 // Waiting ....
@@ -273,7 +282,7 @@ void weather_task(void *) {
         uint64_t now = millis();
         if (now > next_check) {
             next_check += WEATHER_INTERVAL_MS;
-            Serial.printf("Getting weather for %s\n", LOCATION.c_str());
+            Serial.printf("Getting weather for %s\n", FULL_LOCATION.c_str());
             get_weather();
             get_weather_icon();
         }
@@ -284,11 +293,8 @@ void weather_task(void *) {
 // ----------------------------------------------------------------------------------------------------------
 // METHOD: Display the Temperature
 // ----------------------------------------------------------------------------------------------------------
-const uint8_t IND_WIDTH = 8, IND_HEIGHT = 10;
-
-void display_indicator(GFXcanvas16 *canvas, const char *format, float value, Indicator indicator) {
-
-    uint8_t indicator_index = (uint8_t)indicator, left_x = SCREEN_WIDTH / 2 + indicator_info[indicator_index].x;
+void display_indicator(GFXcanvas16 *canvas, const char *format, float value, TopIndicator indicator, uint16_t text_colour_565) {
+    uint8_t indicator_index = (uint8_t)indicator, left_x = SCREEN_WIDTH / 2 + indicator_info_top[indicator_index].x;
 
     char temp_buffer[16];
     snprintf(temp_buffer, sizeof(temp_buffer), format, value);
@@ -296,11 +302,12 @@ void display_indicator(GFXcanvas16 *canvas, const char *format, float value, Ind
 
     left_x -= pixels;
 
-    if (ind[indicator_index].canvas.canvas16)
-        canvas->drawRGBBitmap(left_x, 0, ind[indicator_index].canvas.canvas16->getBuffer(), IND_WIDTH, IND_HEIGHT);
+    if (ind_top[indicator_index].canvas.canvas16)
+        canvas->drawRGBBitmap(left_x, 0, ind_top[indicator_index].canvas.canvas16->getBuffer(), IND_WIDTH, IND_HEIGHT);
     left_x += IND_WIDTH + 2;
 
     canvas->setCursor(left_x, OFFSET_TEXT_TOP_Y);
+    canvas->setTextColor(text_colour_565);
     canvas->printf(temp_buffer);
 }
 
@@ -308,21 +315,54 @@ void display_temperature(GFXcanvas16 *canvas) {
     display_indicator(canvas, "%.1f"
                               "\xF8"
                               "C",
-                      CURRENT_TEMP, IndTemperature);
+                      CURRENT_TEMP, IndTemperature, matrix.color565(255, 237, 128)); // light yellow
 }
 
 // ----------------------------------------------------------------------------------------------------------
 // METHOD: Display the Wind
 // ----------------------------------------------------------------------------------------------------------
 void display_wind(GFXcanvas16 *canvas) {
-    display_indicator(canvas, "%.0f km/h", CURRENT_WIND, IndWind);
+    display_indicator(canvas, "%.0f km/h", CURRENT_WIND, IndWind, matrix.color565(255, 192, 255)); // purplish
 }
 
 // ----------------------------------------------------------------------------------------------------------
 // METHOD: Display the Humidity
 // ----------------------------------------------------------------------------------------------------------
 void display_humidity(GFXcanvas16 *canvas) {
-    display_indicator(canvas, "%.0f%%%%", CURRENT_HUMIDITY, IndHumidity);
+    display_indicator(canvas, "%.0f%%%%", CURRENT_HUMIDITY, IndHumidity, matrix.color565(128, 192, 255)); // cyanish
+}
+
+// ----------------------------------------------------------------------------------------------------------
+// METHOD: Display the Time
+// ----------------------------------------------------------------------------------------------------------
+void display_time(GFXcanvas16 *canvas) {
+    uint8_t indicator_index = (uint8_t)IndTime, left_x = SCREEN_WIDTH / 2 + indicator_info_bottom[indicator_index].x;
+
+    char temp_buffer[16];
+    struct tm timeinfo;
+    getLocalTime(&timeinfo);
+    snprintf(temp_buffer, sizeof(temp_buffer), "%02d%c%02d", timeinfo.tm_hour, timeinfo.tm_sec % 2 ? ':' : ' ', timeinfo.tm_min);
+    uint16_t pixels = 3 * strlen(temp_buffer);
+
+    left_x -= pixels;
+
+    canvas->setCursor(left_x, OFFSET_TEXT_BOTTOM_Y);
+    canvas->setTextColor(matrix.color565(255, 255, 255)); // white
+    canvas->printf(temp_buffer);
+}
+
+// ----------------------------------------------------------------------------------------------------------
+// METHOD: Display the Location
+// ----------------------------------------------------------------------------------------------------------
+void display_location(GFXcanvas16 *canvas) {
+    uint8_t indicator_index = (uint8_t)IndLocation, left_x = indicator_info_bottom[indicator_index].x;
+
+    char temp_buffer[16];
+    snprintf(temp_buffer, sizeof(temp_buffer), "%s", LOCATION.c_str());
+
+    canvas->setCursor(left_x, OFFSET_TEXT_BOTTOM_Y);
+    canvas->setTextColor(matrix.color565(128, 255, 128)); // green
+    canvas->printf(temp_buffer);
 }
 
 // ==========================================================================================================
@@ -364,12 +404,12 @@ void setup(void) {
     Serial.println();
 
     // Load the indicators
-    for (uint8_t i = 0; i < INDICATOR_COUNT; i++) {
+    for (uint8_t i = 0; i < INDICATOR_COUNT_TOP; i++) {
         String indicator_name = "/ind_" + indicator_names[i] + ".bmp";
-        rc = img_reader.loadBMP(indicator_name.c_str(), ind[i]);
-        Serial.printf("Indicator [%d:%s] ", i, indicator_name.c_str());
+        rc = img_reader.loadBMP(indicator_name.c_str(), ind_top[i]);
+        Serial.printf("Top indicator [%d:%s] ", i, indicator_name.c_str());
         if (rc == IMAGE_SUCCESS) {
-            Serial.printf("LOADED! [%d x %d]\n", ind[i].width(), ind[i].height());
+            Serial.printf("LOADED! [%d x %d]\n", ind_top[i].width(), ind_top[i].height());
 
         } else {
             Serial.printf("FAILED : [%d]\n", (uint8_t)rc);
@@ -377,22 +417,39 @@ void setup(void) {
     }
     Serial.println();
 
-    // Initialise the x-offsets of the indicators (the first is 0, the rest build on the width of the previous one)
-    indicator_info[0].x = 0;
-    for (uint8_t i = 1; i < INDICATOR_COUNT; i++) {
-        indicator_info[i].x = indicator_info[i - 1].x + indicator_info[i - 1].w;
+    // Initialise the x-offsets of the top indicators (the first is 0, the rest build on the width of the previous one)
+    indicator_info_top[0].x = 0;
+    for (uint8_t i = 1; i < INDICATOR_COUNT_TOP; i++) {
+        indicator_info_top[i].x = indicator_info_top[i - 1].x + indicator_info_top[i - 1].w;
     }
-    total_top_w = indicator_info[INDICATOR_COUNT - 1].x + indicator_info[INDICATOR_COUNT - 1].w;
+    total_w_top = indicator_info_top[INDICATOR_COUNT_TOP - 1].x + indicator_info_top[INDICATOR_COUNT_TOP - 1].w;
 
-    for (uint8_t i = 0; i < INDICATOR_COUNT; i++) {
-        Serial.printf("x[%d] = %d\n", i, indicator_info[i].x);
+    for (uint8_t i = 0; i < INDICATOR_COUNT_TOP; i++) {
+        Serial.printf("x[%d] = %d\n", i, indicator_info_top[i].x);
     }
-    Serial.printf("total_top_w = %d\n", total_top_w);
+    Serial.printf("total_w_top = %d\n", total_w_top);
 
     // create the top canvas
-    top_canvas = new GFXcanvas16(total_top_w, IND_HEIGHT);
+    top_canvas = new GFXcanvas16(total_w_top, IND_HEIGHT);
     top_canvas->cp437(true);
     top_canvas->setTextWrap(false);
+
+    // Initialise the x-offsets of the top indicators (the first is 0, the rest build on the width of the previous one)
+    indicator_info_bottom[0].x = 0;
+    for (uint8_t i = 1; i < INDICATOR_COUNT_BOTTOM; i++) {
+        indicator_info_bottom[i].x = indicator_info_bottom[i - 1].x + indicator_info_bottom[i - 1].w;
+    }
+    total_w_bottom = indicator_info_bottom[INDICATOR_COUNT_BOTTOM - 1].x + indicator_info_bottom[INDICATOR_COUNT_BOTTOM - 1].w;
+
+    for (uint8_t i = 0; i < INDICATOR_COUNT_BOTTOM; i++) {
+        Serial.printf("x[%d] = %d\n", i, indicator_info_bottom[i].x);
+    }
+    Serial.printf("total_w_bottom = %d\n", total_w_bottom);
+
+    // create the bottom canvas
+    bottom_canvas = new GFXcanvas16(total_w_bottom, IND_HEIGHT);
+    bottom_canvas->cp437(true);
+    bottom_canvas->setTextWrap(false);
 
     ProtomatterStatus status = matrix.begin();
     Serial.printf("Protomatter begin() status: %d\n", status);
@@ -402,15 +459,6 @@ void setup(void) {
         err(250); // Fast bink = I2C error
     }
     accel.setRange(LIS3DH_RANGE_4_G); // 2, 4, 8 or 16 G!
-
-    // colors[0] = matrix.color565(64, 64, 64);  // Dark Gray
-    // colors[1] = matrix.color565(120, 79, 23); // Brown
-    // colors[2] = matrix.color565(228, 3, 3);   // Red
-    // colors[3] = matrix.color565(255, 140, 0); // Orange
-    // colors[4] = matrix.color565(255, 237, 0); // Yellow
-    // colors[5] = matrix.color565(0, 128, 38);  // Green
-    // colors[6] = matrix.color565(0, 77, 255);  // Blue
-    // colors[7] = matrix.color565(117, 7, 135); // Purple
 
     matrix.fillScreen(0x0);
     matrix.drawRGBBitmap(0, 16, img.canvas.canvas16->getBuffer(), SCREEN_WIDTH, 32);
@@ -443,7 +491,7 @@ void setup(void) {
     }
 
     do_animation = 0;
-    waiting_time = millis() + indicator_info[0].pause_ms;
+    waiting_time_top = millis() + indicator_info_top[0].pause_ms;
 }
 
 // ==========================================================================================================
@@ -520,55 +568,54 @@ void loop() {
 
     // are we animating or waiting?
     uint64_t now = millis();
-    if (now > waiting_time) {
+    if (now > waiting_time_top) {
         // not waiting any more
 
-        indicator_left_x++;
-        indicator_left_x %= total_top_w;
+        indicator_left_x_top++;
+        indicator_left_x_top %= total_w_top;
 
-        for (uint8_t i = 0; i < INDICATOR_COUNT; i++) {
+        for (uint8_t i = 0; i < INDICATOR_COUNT_TOP; i++) {
             // has an indicator reached the centre of the screen?
-            if (indicator_info[i].x == indicator_left_x) {
-                waiting_time = now + indicator_info[i].pause_ms;
+            if (indicator_info_top[i].x == indicator_left_x_top) {
+                waiting_time_top = now + indicator_info_top[i].pause_ms;
             }
         }
     }
 
-    // erase the top line
-    top_canvas->fillRect(0, 0, total_top_w, IND_HEIGHT, 0);
+    if (now > waiting_time_bottom) {
+        // not waiting any more
+
+        indicator_left_x_bottom++;
+        indicator_left_x_bottom %= total_w_bottom;
+
+        for (uint8_t i = 0; i < INDICATOR_COUNT_BOTTOM; i++) {
+            // has an indicator reached the centre of the screen?
+            if (indicator_info_bottom[i].x == indicator_left_x_bottom) {
+                waiting_time_bottom = now + indicator_info_bottom[i].pause_ms;
+            }
+        }
+    }
+
+    // erase the top canvas
+    top_canvas->fillRect(0, 0, total_w_top, IND_HEIGHT, 0);
     // display the scrolling items in the top lane. they each check if they are in view before rendering anything
     display_temperature(top_canvas);
     display_wind(top_canvas);
     display_humidity(top_canvas);
-    matrix.drawRGBBitmap(-indicator_left_x, 0, top_canvas->getBuffer(), top_canvas->width(), IND_HEIGHT);
-    if (indicator_left_x >= (total_top_w - SCREEN_WIDTH)) {
-        matrix.drawRGBBitmap(total_top_w - indicator_left_x, 0, top_canvas->getBuffer(), top_canvas->width(), IND_HEIGHT);
+    matrix.drawRGBBitmap(-indicator_left_x_top, CANVAS_Y_TOP, top_canvas->getBuffer(), top_canvas->width(), IND_HEIGHT);
+    if (indicator_left_x_top >= (total_w_top - SCREEN_WIDTH)) {
+        matrix.drawRGBBitmap(total_w_top - indicator_left_x_top, CANVAS_Y_TOP, top_canvas->getBuffer(), top_canvas->width(), IND_HEIGHT);
     }
 
-    matrix.setCursor(32 - 5 * 3, OFFSET_TEXT_BOTTOM_Y);
-    struct tm timeinfo;
-    if (getLocalTime(&timeinfo)) {
-        matrix.printf("%02d%c%02d", timeinfo.tm_hour, timeinfo.tm_sec % 2 ? ':' : ' ', timeinfo.tm_min);
+    // erase the bottom canvas
+    bottom_canvas->fillRect(0, 0, total_w_bottom, IND_HEIGHT, 0);
+    // display the scrolling items in the bottom lane. they each check if they are in view before rendering anything
+    display_time(bottom_canvas);
+    display_location(bottom_canvas);
+    matrix.drawRGBBitmap(-indicator_left_x_bottom, CANVAS_Y_BOTTOM, bottom_canvas->getBuffer(), bottom_canvas->width(), IND_HEIGHT);
+    if (indicator_left_x_bottom >= (total_w_bottom - SCREEN_WIDTH)) {
+        matrix.drawRGBBitmap(total_w_bottom - indicator_left_x_bottom, CANVAS_Y_BOTTOM, bottom_canvas->getBuffer(), bottom_canvas->width(), IND_HEIGHT);
     }
 
-    // matrix.drawCircle(x >> scale, y >> scale, r, colors[(x + y) % 8]);
-    // x += dx;
-    // y += dy;
-    // if ((x >> scale) < r) {
-    //     x = (r << scale);
-    //     dx = random(1, 3);
-    // }
-    // if ((x >> scale) + r > 63) {
-    //     x = (63 - r) << scale;
-    //     dx = -dx;
-    // }
-    // if ((y >> scale) < r) {
-    //     y = r << scale;
-    //     dy = -dy;
-    // }
-    // if ((y >> scale) + r > 63) {
-    //     y = (63 - r) << scale;
-    //     dy = -random(1, 3);
-    // }
     matrix.show(); // Copy data to matrix buffers
 }
