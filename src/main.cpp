@@ -61,7 +61,7 @@ uint8_t oePin = 14;
 #endif
 
 Adafruit_Protomatter matrix(
-    SCREEN_WIDTH, 4, 1, rgbPins, NUM_ADDR_PINS, addrPins,
+    SCREEN_WIDTH, 5, 1, rgbPins, NUM_ADDR_PINS, addrPins,
     clockPin, latchPin, oePin, true);
 
 Adafruit_LIS3DH accel = Adafruit_LIS3DH();
@@ -84,7 +84,6 @@ void err(int x) {
 // ----------------------------------------------------------------------------------------------------------
 char ssid[] = WIFI_SSID;
 char pass[] = WIFI_PASSWORD;
-WiFiClient client;
 
 // ----------------------------------------------------------------------------------------------------------
 // Time
@@ -96,12 +95,18 @@ const int daylightOffset_sec = 0;
 // ----------------------------------------------------------------------------------------------------------
 // Weather API
 // ----------------------------------------------------------------------------------------------------------
-// #define SIMULATE_WEATHER_API
+// #define SIMULATE_CURRENT_WEATHER_API
+#define SIMULATE_WEATHER_FORECAST_API
+
+#if !defined(SIMULATE_CURRENT_WEATHER_API) || !defined(SIMULATE_WEATHER_FORECAST_API)
+HTTPClient client;
+#endif
+
 // Use cityname, country code where countrycode is ISO3166 format.
 // E.g. "New York, US" or "London, GB"
 // String LOCATION = "Melbourne";
 String LOCATION = "Langwarrin";
-String FULL_LOCATION = LOCATION + ",%20AU";
+String FULL_LOCATION = LOCATION + ",AU";
 String openweather_token = OPENWEATHER_TOKEN;
 String UNITS = "metric"; // can pick 'imperial' or 'metric' as part of URL query
 const uint32_t WEATHER_INTERVAL_MIN = 10;
@@ -110,7 +115,8 @@ float CURRENT_TEMP, CURRENT_WIND, CURRENT_HUMIDITY;
 String CURRENT_ICON;
 
 //  Set up from where we'll be fetching data
-String DATA_SOURCE = "http://api.openweathermap.org/data/2.5/weather?q=" + FULL_LOCATION + "&units=" + UNITS + "&appid=" + openweather_token;
+String CURRENT_WEATHER_URL = "http://api.openweathermap.org/data/2.5/weather?q=" + FULL_LOCATION + "&units=" + UNITS + "&appid=" + openweather_token;
+String FORECAST_WEATHER_URL = "http://api.openweathermap.org/data/2.5/forecast?q=" + FULL_LOCATION + "&units=" + UNITS + "&appid=" + openweather_token;
 
 const uint8_t ICON_COUNT = 9, INDICATOR_COUNT_TOP = 3, INDICATOR_COUNT_BOTTOM = 2;
 Adafruit_ImageReader img_reader(LittleFS);
@@ -232,11 +238,11 @@ void get_weather_icon() {
 }
 
 // ----------------------------------------------------------------------------------------------------------
-// METHOD: Get weather update
+// METHOD: Get current weather update
 // ----------------------------------------------------------------------------------------------------------
-void get_weather() {
+void get_current_weather() {
     JsonDocument doc;
-#if defined(SIMULATE_WEATHER_API)
+#if defined(SIMULATE_CURRENT_WEATHER_API)
     deserializeJson(
         doc,
         "{"
@@ -244,10 +250,8 @@ void get_weather() {
         "\"main\":{\"temp\":16.58,\"feels_like\":15.55,\"humidity\":48}"
         "}");
 #else
-    WiFiClient wifi;
-    HTTPClient client;
-    Serial.printf("%s\n", DATA_SOURCE.c_str());
-    client.begin(DATA_SOURCE);
+    Serial.printf("%s\n", CURRENT_WEATHER_URL.c_str());
+    client.begin(CURRENT_WEATHER_URL);
     client.GET();
     String response = client.getString();
     Serial.printf("%s\n", response.c_str());
@@ -274,6 +278,151 @@ void get_weather() {
     CURRENT_ICON = (String)doc["weather"][0]["icon"];
 }
 
+// ----------------------------------------------------------------------------------------------------------
+// METHOD: Get weather foreacst update
+// ----------------------------------------------------------------------------------------------------------
+void get_weather_forecast() {
+    JsonDocument doc;
+#if defined(SIMULATE_WEATHER_FORECAST_API)
+    deserializeJson(
+        doc,
+        "{"
+        "\"cod\": \"200\","
+        "\"message\": 0,"
+        "\"cnt\": 40,"
+        "\"list\": ["
+        "{"
+        "\"dt\": 1726390800,"
+        "\"main\": {"
+        "\"temp\": 11.65,"
+        "\"feels_like\": 10.46,"
+        "\"temp_min\": 10.5,"
+        "\"temp_max\": 11.65,"
+        "\"pressure\": 1034,"
+        "\"sea_level\": 1034,"
+        "\"grnd_level\": 1033,"
+        "\"humidity\": 61,"
+        "\"temp_kf\": 1.15"
+        "},"
+        "\"weather\": ["
+        "{"
+        "\"id\": 803,"
+        "\"main\": \"Clouds\","
+        "\"description\": \"broken clouds\","
+        "\"icon\": \"04n\""
+        "}"
+        "],"
+        "\"clouds\": {"
+        "\"all\": 70"
+        "},"
+        "\"wind\": {"
+        "\"speed\": 5.1,"
+        "\"deg\": 203,"
+        "\"gust\": 7.03"
+        "},"
+        "\"visibility\": 10000,"
+        "\"pop\": 0,"
+        "\"sys\": {"
+        "\"pod\": \"n\""
+        "},"
+        "\"dt_txt\": \"2024-09-15 09:00:00\""
+        "},"
+        "{"
+        "\"dt\": 1726401600,"
+        "\"main\": {"
+        "\"temp\": 10.7,"
+        "\"feels_like\": 9.47,"
+        "\"temp_min\": 8.8,"
+        "\"temp_max\": 10.7,"
+        "\"pressure\": 1034,"
+        "\"sea_level\": 1034,"
+        "\"grnd_level\": 1033,"
+        "\"humidity\": 63,"
+        "\"temp_kf\": 1.9"
+        "},"
+        "\"weather\": ["
+        "{"
+        "\"id\": 803,"
+        "\"main\": \"Clouds\","
+        "\"description\": \"broken clouds\","
+        "\"icon\": \"04n\""
+        "}"
+        "],"
+        "\"clouds\": {"
+        "\"all\": 67"
+        "},"
+        "\"wind\": {"
+        "\"speed\": 4.06,"
+        "\"deg\": 215,"
+        "\"gust\": 6.58"
+        "},"
+        "\"visibility\": 10000,"
+        "\"pop\": 0,"
+        "\"sys\": {"
+        "\"pod\": \"n\""
+        "},"
+        "\"dt_txt\": \"2024-09-15 12:00:00\""
+        "},"
+        "{"
+        "\"dt\": 1726412400,"
+        "\"main\": {"
+        "\"temp\": 10.14,"
+        "\"feels_like\": 8.91,"
+        "\"temp_min\": 9.38,"
+        "\"temp_max\": 10.14,"
+        "\"pressure\": 1033,"
+        "\"sea_level\": 1033,"
+        "\"grnd_level\": 1031,"
+        "\"humidity\": 65,"
+        "\"temp_kf\": 0.76"
+        "},"
+        "\"weather\": ["
+        "{"
+        "\"id\": 803,"
+        "\"main\": \"Clouds\","
+        "\"description\": \"broken clouds\","
+        "\"icon\": \"04n\""
+        "}"
+        "],"
+        "\"clouds\": {"
+        "\"all\": 78"
+        "},"
+        "\"wind\": {"
+        "\"speed\": 4.91,"
+        "\"deg\": 251,"
+        "\"gust\": 7.69"
+        "},"
+        "\"visibility\": 10000,"
+        "\"pop\": 0,"
+        "\"sys\": {"
+        "\"pod\": \"n\""
+        "},"
+        "\"dt_txt\": \"2024-09-15 15:00:00\""
+        "},");
+#else
+    Serial.printf("%s\n", CURRENT_WEATHER_URL.c_str());
+    client.begin(CURRENT_WEATHER_URL);
+    client.GET();
+    String response = client.getString();
+    Serial.printf("%s\n", response.c_str());
+
+    deserializeJson(doc, response.c_str());
+
+    // {
+    //     "coord":{"lon":144.9633,"lat":-37.814},
+    //     "weather":[{"id":803,"main":"Clouds","description":"broken clouds","icon":"04n"}],
+    //     "base":"stations",
+    //     "main":{"temp":16.58,"feels_like":15.55,"temp_min":15.53,"temp_max":17.34,"pressure":1003,"humidity":48,"sea_level":1003,"grnd_level":999},
+    //     "visibility":10000,
+    //     "wind":{"speed":8.23,"deg":330,"gust":13.38},
+    //     "clouds":{"all":59},
+    //     "dt":1725094432,
+    //     "sys":{"type":2,"id":2080970,"country":"AU","sunrise":1725050610,"sunset":1725091077},
+    //     "timezone":36000,"id":2158177,"name":"Melbourne","cod":200
+    // }
+#endif
+}
+
 TaskHandle_t task_weather;
 void weather_task(void *) {
     const uint32_t WEATHER_INTERVAL_MS = WEATHER_INTERVAL_MIN * 60 * 1000;
@@ -283,7 +432,7 @@ void weather_task(void *) {
         if (now > next_check) {
             next_check += WEATHER_INTERVAL_MS;
             Serial.printf("Getting weather for %s\n", FULL_LOCATION.c_str());
-            get_weather();
+            get_current_weather();
             get_weather_icon();
         }
         delay(100);
@@ -482,7 +631,7 @@ void setup(void) {
     initTime();
 
     xTaskCreatePinnedToCore(weather_task, "weather", 4096, NULL, 2, &task_weather, 0);
-    // get_weather();
+    // get_current_weather();
     // get_weather_icon();
 
     delay(1000);
@@ -492,6 +641,7 @@ void setup(void) {
 
     do_animation = 0;
     waiting_time_top = millis() + indicator_info_top[0].pause_ms;
+    waiting_time_bottom = millis() + indicator_info_bottom[0].pause_ms;
 }
 
 // ==========================================================================================================
