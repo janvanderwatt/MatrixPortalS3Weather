@@ -22,6 +22,9 @@ or "doublebuffer" for animation basics.
 #include <time.h>
 #include <ArduinoJson.h>
 
+#include <TimeLib.h>
+#include <Timezone.h>
+
 #include "secrets.h"
 
 // ----------------------------------------------------------------------------------------------------------
@@ -96,7 +99,7 @@ const int daylightOffset_sec = 0;
 // Weather API
 // ----------------------------------------------------------------------------------------------------------
 // #define SIMULATE_CURRENT_WEATHER_API
-#define SIMULATE_WEATHER_FORECAST_API
+// #define SIMULATE_WEATHER_FORECAST_API
 
 #if !defined(SIMULATE_CURRENT_WEATHER_API) || !defined(SIMULATE_WEATHER_FORECAST_API)
 HTTPClient client;
@@ -111,11 +114,16 @@ String openweather_token = OPENWEATHER_TOKEN;
 String UNITS = "metric"; // can pick 'imperial' or 'metric' as part of URL query
 const uint32_t WEATHER_INTERVAL_MIN = 10;
 
+const uint32_t SCREEN_SWAP_TIME_MS = 10 * 1000;
+uint64_t next_swap_time = 0;
+
 float CURRENT_TEMP, CURRENT_WIND, CURRENT_HUMIDITY;
 String CURRENT_ICON;
 
 //  Set up from where we'll be fetching data
+// https://openweathermap.org/current
 String CURRENT_WEATHER_URL = "http://api.openweathermap.org/data/2.5/weather?q=" + FULL_LOCATION + "&units=" + UNITS + "&appid=" + openweather_token;
+// https://openweathermap.org/forecast5
 String FORECAST_WEATHER_URL = "http://api.openweathermap.org/data/2.5/forecast?q=" + FULL_LOCATION + "&units=" + UNITS + "&appid=" + openweather_token;
 
 const uint8_t ICON_COUNT = 9, INDICATOR_COUNT_TOP = 3, INDICATOR_COUNT_BOTTOM = 2;
@@ -132,6 +140,23 @@ String icon_names[ICON_COUNT] = {
     "13", // "snow"
     "50"  // "mist"
 };
+
+uint8_t showing_forecast = false;
+uint8_t valid_forecasts = 0;
+
+struct ForecastInfo_t
+{
+    float temp, wind;
+    String icon;
+    uint8_t hour;
+};
+
+#define MAX_FORECASTS 6
+ForecastInfo_t current_forecast[MAX_FORECASTS] = {0};
+
+TimeChangeRule AEDT = {"AEDT", First, Sun, Oct, 2, 660}; // Daylight time = UTC + 11 hours
+TimeChangeRule AEST = {"AEST", First, Sun, Apr, 3, 600}; // Standard time = UTC + 10 hours
+Timezone Melbourne(AEDT, AEST);
 
 // ----------------------------------------------------------------------------------------------------------
 // Weather Icons and Indicators
@@ -181,6 +206,8 @@ const uint8_t OFFSET_TEXT_BOTTOM_Y = 2;
 
 const uint8_t IND_WIDTH = 8, IND_HEIGHT = 10;
 const uint16_t CANVAS_Y_TOP = 0, CANVAS_Y_BOTTOM = SCREEN_HEIGHT - 1 - IND_HEIGHT;
+
+uint16_t text_colour_565_time, text_colour_565_temperature, text_colour_565_wind;
 
 // ----------------------------------------------------------------------------------------------------------
 // Waiting ....
@@ -283,6 +310,9 @@ void get_current_weather() {
 // ----------------------------------------------------------------------------------------------------------
 void get_weather_forecast() {
     JsonDocument doc;
+    while (showing_forecast) {
+        sleep(100);
+    }
 #if defined(SIMULATE_WEATHER_FORECAST_API)
     deserializeJson(
         doc,
@@ -345,7 +375,7 @@ void get_weather_forecast() {
         "\"id\": 803,"
         "\"main\": \"Clouds\","
         "\"description\": \"broken clouds\","
-        "\"icon\": \"04n\""
+        "\"icon\": \"03d\""
         "}"
         "],"
         "\"clouds\": {"
@@ -381,7 +411,7 @@ void get_weather_forecast() {
         "\"id\": 803,"
         "\"main\": \"Clouds\","
         "\"description\": \"broken clouds\","
-        "\"icon\": \"04n\""
+        "\"icon\": \"11d\""
         "}"
         "],"
         "\"clouds\": {"
@@ -398,10 +428,11 @@ void get_weather_forecast() {
         "\"pod\": \"n\""
         "},"
         "\"dt_txt\": \"2024-09-15 15:00:00\""
-        "},");
+        "}"
+        "]");
 #else
-    Serial.printf("%s\n", CURRENT_WEATHER_URL.c_str());
-    client.begin(CURRENT_WEATHER_URL);
+    Serial.printf("%s\n", FORECAST_WEATHER_URL.c_str());
+    client.begin(FORECAST_WEATHER_URL);
     client.GET();
     String response = client.getString();
     Serial.printf("%s\n", response.c_str());
@@ -421,6 +452,22 @@ void get_weather_forecast() {
     //     "timezone":36000,"id":2158177,"name":"Melbourne","cod":200
     // }
 #endif
+    JsonArray forecasts = doc["list"];
+    uint8_t forecasts_size = forecasts.size();
+    Serial.printf("FORECASTS = [%d]\n", forecasts_size);
+    valid_forecasts = 0;
+    for (uint8_t i = 0; i < MAX_FORECASTS && i < forecasts_size; i++, valid_forecasts++) {
+        current_forecast[i].temp = forecasts[i]["main"]["temp"];
+        current_forecast[i].wind = forecasts[i]["wind"]["speed"];
+        current_forecast[i].icon = (String)(forecasts[i]["weather"][0]["icon"]);
+        time_t unixTimestamp = forecasts[i]["dt"];
+        // Convert UTC time to Melbourne time
+        time_t melbourneTime = Melbourne.toLocal(unixTimestamp);
+        current_forecast[i].hour = hour(melbourneTime);
+        Serial.printf("-- FORECAST[%d]=[%02dH:%.1fC, %.1fm/s, %s]\n", i, current_forecast[i].hour, current_forecast[i].temp, current_forecast[i].wind, current_forecast[i].icon.c_str());
+    }
+
+    showing_forecast = true;
 }
 
 TaskHandle_t task_weather;
@@ -434,6 +481,7 @@ void weather_task(void *) {
             Serial.printf("Getting weather for %s\n", FULL_LOCATION.c_str());
             get_current_weather();
             get_weather_icon();
+            get_weather_forecast();
         }
         delay(100);
     }
@@ -464,14 +512,14 @@ void display_temperature(GFXcanvas16 *canvas) {
     display_indicator(canvas, "%.1f"
                               "\xF8"
                               "C",
-                      CURRENT_TEMP, IndTemperature, matrix.color565(255, 237, 128)); // light yellow
+                      CURRENT_TEMP, IndTemperature, text_colour_565_temperature); // light yellow
 }
 
 // ----------------------------------------------------------------------------------------------------------
 // METHOD: Display the Wind
 // ----------------------------------------------------------------------------------------------------------
 void display_wind(GFXcanvas16 *canvas) {
-    display_indicator(canvas, "%.0f km/h", CURRENT_WIND, IndWind, matrix.color565(255, 192, 255)); // purplish
+    display_indicator(canvas, "%.0f km/h", CURRENT_WIND, IndWind, text_colour_565_wind); // purplish
 }
 
 // ----------------------------------------------------------------------------------------------------------
@@ -510,8 +558,192 @@ void display_location(GFXcanvas16 *canvas) {
     snprintf(temp_buffer, sizeof(temp_buffer), "%s", LOCATION.c_str());
 
     canvas->setCursor(left_x, OFFSET_TEXT_BOTTOM_Y);
-    canvas->setTextColor(matrix.color565(128, 255, 128)); // green
+    canvas->setTextColor(text_colour_565_time); // green
     canvas->printf(temp_buffer);
+}
+
+// ----------------------------------------------------------------------------------------------------------
+// METHOD: Display the current weather
+// ----------------------------------------------------------------------------------------------------------
+int16_t icon_x = 0;
+const uint16_t icon_bits = 7, icon_mod = (1 << icon_bits);
+uint8_t icon_direction = 1;
+
+void display_current_weather() {
+    if (previous_icon != current_icon) {
+        previous_icon = current_icon;
+    }
+    if (previous_icon != NULL) {
+        uint8_t k0 = (icon_x % icon_mod), k1 = icon_mod - k0;
+        uint16_t W = previous_icon->width(), H = previous_icon->height();
+        uint16_t bmp[W * H];
+        memset(bmp, 0, W * H * 2);
+        uint16_t *icon_buffer = previous_icon->canvas.canvas16->getBuffer();
+        for (uint8_t y = 0; y < previous_icon->height() - 1; y++) {
+            for (uint8_t x = 0; x < previous_icon->width() - 1; x++) {
+                uint16_t c0 = icon_buffer[y * W + x], c1 = icon_buffer[y * W + x + 1];
+                uint16_t r0 = (c0 >> 11), g0 = (c0 >> 5) & 0x3F, b0 = c0 & 0x1F;
+                uint16_t r1 = (c1 >> 11), g1 = (c1 >> 5) & 0x3F, b1 = c1 & 0x1F;
+                r0 = ((r0 * k0 + r1 * k1) >> icon_bits) << 11;
+                g0 = ((g0 * k0 + g1 * k1) >> icon_bits) << 5;
+                b0 = (b0 * k0 + b1 * k1) >> icon_bits;
+                bmp[y * W + x + 1] = r0 | g0 | b0;
+            }
+        }
+        // matrix.drawRGBBitmap(32 - previous_icon->width() / 2, 32 - previous_icon->height() / 2, previous_icon->canvas.canvas16->getBuffer(), previous_icon->width(), previous_icon->height());
+        matrix.drawRGBBitmap(icon_x >> icon_bits, 32 - H / 2, bmp, W, H);
+
+        if (icon_direction) {
+            icon_x++;
+            if (icon_x == ((63 - W) * icon_mod) - 1) {
+                icon_direction = 0;
+            }
+
+        } else {
+            icon_x--;
+            if (icon_x == 0) {
+                icon_direction = 1;
+            }
+        }
+    }
+
+    // are we animating or waiting?
+    uint64_t now = millis();
+    if (now > waiting_time_top) {
+        // not waiting any more
+
+        indicator_left_x_top++;
+        indicator_left_x_top %= total_w_top;
+
+        for (uint8_t i = 0; i < INDICATOR_COUNT_TOP; i++) {
+            // has an indicator reached the centre of the screen?
+            if (indicator_info_top[i].x == indicator_left_x_top) {
+                waiting_time_top = now + indicator_info_top[i].pause_ms;
+            }
+        }
+    }
+
+    if (now > waiting_time_bottom) {
+        // not waiting any more
+
+        indicator_left_x_bottom++;
+        indicator_left_x_bottom %= total_w_bottom;
+
+        for (uint8_t i = 0; i < INDICATOR_COUNT_BOTTOM; i++) {
+            // has an indicator reached the centre of the screen?
+            if (indicator_info_bottom[i].x == indicator_left_x_bottom) {
+                waiting_time_bottom = now + indicator_info_bottom[i].pause_ms;
+            }
+        }
+    }
+
+    // erase the top canvas
+    top_canvas->fillRect(0, 0, total_w_top, IND_HEIGHT, 0);
+    // display the scrolling items in the top lane. they each check if they are in view before rendering anything
+    display_temperature(top_canvas);
+    display_wind(top_canvas);
+    display_humidity(top_canvas);
+    matrix.drawRGBBitmap(-indicator_left_x_top, CANVAS_Y_TOP, top_canvas->getBuffer(), top_canvas->width(), IND_HEIGHT);
+    if (indicator_left_x_top >= (total_w_top - SCREEN_WIDTH)) {
+        matrix.drawRGBBitmap(total_w_top - indicator_left_x_top, CANVAS_Y_TOP, top_canvas->getBuffer(), top_canvas->width(), IND_HEIGHT);
+    }
+
+    // erase the bottom canvas
+    bottom_canvas->fillRect(0, 0, total_w_bottom, IND_HEIGHT, 0);
+    // display the scrolling items in the bottom lane. they each check if they are in view before rendering anything
+    display_time(bottom_canvas);
+    display_location(bottom_canvas);
+    matrix.drawRGBBitmap(-indicator_left_x_bottom, CANVAS_Y_BOTTOM, bottom_canvas->getBuffer(), bottom_canvas->width(), IND_HEIGHT);
+    if (indicator_left_x_bottom >= (total_w_bottom - SCREEN_WIDTH)) {
+        matrix.drawRGBBitmap(total_w_bottom - indicator_left_x_bottom, CANVAS_Y_BOTTOM, bottom_canvas->getBuffer(), bottom_canvas->width(), IND_HEIGHT);
+    }
+}
+
+// ----------------------------------------------------------------------------------------------------------
+// METHOD: Display the icon scaled
+// ----------------------------------------------------------------------------------------------------------
+void display_scaled_icon(String icon_name, int16_t y, Adafruit_Protomatter *canvas) {
+    Adafruit_Image *forecast_icon = NULL;
+    String icon_code = icon_name.substring(0, 2);
+    for (uint8_t i = 0; i < ICON_COUNT; i++) {
+        if (icon_code == icon_names[i]) {
+            forecast_icon = &icon[i][icon_name.endsWith("n") ? 1 : 0];
+            // Serial.printf("MATCH!\n");
+        }
+    }
+    if (forecast_icon == NULL) {
+        Serial.printf("NO MATCH! [%s]\n", icon_code.c_str());
+        return;
+    }
+    const uint8_t IMG_SCALE = 3, IMG_DIVIDER = IMG_SCALE * IMG_SCALE;
+    uint16_t W = forecast_icon->width() / IMG_SCALE, H = forecast_icon->height() / IMG_SCALE; // this will always sample LESS or EQUAL size from original
+    uint16_t WW = forecast_icon->width();
+
+    uint16_t bmp[W * H];
+    memset(bmp, 0, W * H * 2);
+    uint16_t *icon_buffer = forecast_icon->canvas.canvas16->getBuffer();
+    for (uint8_t y = 0; y < H; y++) {
+        for (uint8_t x = 0; x < W; x++) {
+            uint16_t bmp_r = 0, bmp_g = 0, bmp_b = 0;
+            for (uint8_t j = y * IMG_SCALE; j < (y + 1) * IMG_SCALE; j++) {
+                for (uint8_t i = x * IMG_SCALE; i < (x + 1) * IMG_SCALE; i++) {
+                    uint16_t c = icon_buffer[j * WW + i];
+                    uint16_t r = (c >> 11), g = (c >> 5) & 0x3F, b = c & 0x1F;
+                    bmp_r += r;
+                    bmp_g += g;
+                    bmp_b += b;
+                }
+            }
+            bmp_r /= IMG_DIVIDER;
+            bmp_g /= IMG_DIVIDER;
+            bmp_b /= IMG_DIVIDER;
+            bmp[y * W + x] = (bmp_r << 11) | (bmp_g << 5) | bmp_b;
+        }
+    }
+    // matrix.drawRGBBitmap(32 - previous_icon->width() / 2, 32 - previous_icon->height() / 2, previous_icon->canvas.canvas16->getBuffer(), previous_icon->width(), previous_icon->height());
+    canvas->drawRGBBitmap(14, y - 6, bmp, W, H);
+}
+
+// ----------------------------------------------------------------------------------------------------------
+// METHOD: Display the forecast weather
+// ----------------------------------------------------------------------------------------------------------
+void display_forecast_weather() {
+    const uint16_t ITEMS_PER_SCREEN = 4;
+    const int16_t FORECAST_ITEM_HEIGHT = SCREEN_HEIGHT / ITEMS_PER_SCREEN;
+    char temp_buffer[16];
+    int16_t pixels, left_x, current_y = 7;
+
+    Adafruit_Protomatter *canvas = &matrix;
+
+    for (uint8_t i = 0; i < ITEMS_PER_SCREEN && i < valid_forecasts; i++) {
+        display_scaled_icon(current_forecast[i].icon, current_y, canvas);
+
+        // Time
+        snprintf(temp_buffer, sizeof(temp_buffer), "%02d", current_forecast[i].hour);
+        pixels = 3 * strlen(temp_buffer);
+        left_x = 6 - pixels;
+        canvas->setCursor(left_x, current_y);
+        canvas->setTextColor(text_colour_565_time);
+        canvas->printf(temp_buffer);
+
+        // Temperature
+        snprintf(temp_buffer, sizeof(temp_buffer), "%.0f", current_forecast[i].temp);
+        pixels = 3 * strlen(temp_buffer);
+        left_x = 39 - pixels;
+        canvas->setCursor(left_x, current_y);
+        canvas->setTextColor(text_colour_565_temperature);
+        canvas->printf(temp_buffer);
+
+        // Wind
+        snprintf(temp_buffer, sizeof(temp_buffer), "%.0f", 3.6f * current_forecast[i].wind);
+        pixels = 3 * strlen(temp_buffer);
+        left_x = 54 - pixels;
+        canvas->setCursor(left_x, current_y);
+        canvas->setTextColor(text_colour_565_wind);
+        canvas->printf(temp_buffer);
+
+        current_y += FORECAST_ITEM_HEIGHT;
+    }
 }
 
 // ==========================================================================================================
@@ -630,6 +862,10 @@ void setup(void) {
     // Init and get the time
     initTime();
 
+    text_colour_565_temperature = matrix.color565(255, 237, 128); // light yellow
+    text_colour_565_wind = matrix.color565(255, 192, 255);        // purplish
+    text_colour_565_time = matrix.color565(160, 255, 160);        // greenish
+
     xTaskCreatePinnedToCore(weather_task, "weather", 4096, NULL, 2, &task_weather, 0);
     // get_current_weather();
     // get_weather_icon();
@@ -642,17 +878,13 @@ void setup(void) {
     do_animation = 0;
     waiting_time_top = millis() + indicator_info_top[0].pause_ms;
     waiting_time_bottom = millis() + indicator_info_bottom[0].pause_ms;
+
+    next_swap_time = millis() + SCREEN_SWAP_TIME_MS;
 }
 
 // ==========================================================================================================
 // MAIN LOOP
 // ==========================================================================================================
-// const int16_t r = 15, scale = 2;
-// int16_t x = 16 << scale, y = 16 << scale, dx = 1, dy = 2;
-int16_t icon_x = 0;
-const uint16_t icon_bits = 7, icon_mod = (1 << icon_bits);
-uint8_t icon_direction = 1;
-
 void loop() {
     // Limit the animation frame rate to MAX_FPS.
     // uint32_t t;
@@ -670,102 +902,27 @@ void loop() {
     yy = event.acceleration.y * 1000;
     zz = event.acceleration.z * 1000;
 
-    // Update pixel data in LED driver
+    // Clear the screen
     matrix.fillScreen(0x0);
 
-    // uint32_t t = (millis() / 1000) % (2 * ICON_COUNT);
-    // int8_t i = t / 2, j = t % 2;
-
-    // Adafruit_Image *bg = &icon[i][j];
-    // matrix.drawRGBBitmap(32 - bg->width() / 2, 32 - bg->height() / 2, bg->canvas.canvas16->getBuffer(), bg->width(), bg->height());
-
-    if (previous_icon != current_icon) {
-        previous_icon = current_icon;
-    }
-    if (previous_icon != NULL) {
-        uint8_t k0 = (icon_x % icon_mod), k1 = icon_mod - k0;
-        uint16_t W = previous_icon->width(), H = previous_icon->height();
-        uint16_t bmp[W * H];
-        memset(bmp, 0, W * H * 2);
-        uint16_t *icon_buffer = previous_icon->canvas.canvas16->getBuffer();
-        for (uint8_t y = 0; y < previous_icon->height() - 1; y++) {
-            for (uint8_t x = 0; x < previous_icon->width() - 1; x++) {
-                uint16_t c0 = icon_buffer[y * W + x], c1 = icon_buffer[y * W + x + 1];
-                uint16_t r0 = (c0 >> 11), g0 = (c0 >> 5) & 0x3F, b0 = c0 & 0x1F;
-                uint16_t r1 = (c1 >> 11), g1 = (c1 >> 5) & 0x3F, b1 = c1 & 0x1F;
-                r0 = ((r0 * k0 + r1 * k1) >> icon_bits) << 11;
-                g0 = ((g0 * k0 + g1 * k1) >> icon_bits) << 5;
-                b0 = (b0 * k0 + b1 * k1) >> icon_bits;
-                bmp[y * W + x + 1] = r0 | g0 | b0;
-            }
-        }
-        // matrix.drawRGBBitmap(32 - previous_icon->width() / 2, 32 - previous_icon->height() / 2, previous_icon->canvas.canvas16->getBuffer(), previous_icon->width(), previous_icon->height());
-        matrix.drawRGBBitmap(icon_x >> icon_bits, 32 - H / 2, bmp, W, H);
-
-        if (icon_direction) {
-            icon_x++;
-            if (icon_x == ((63 - W) * icon_mod) - 1) {
-                icon_direction = 0;
-            }
-
-        } else {
-            icon_x--;
-            if (icon_x == 0) {
-                icon_direction = 1;
-            }
-        }
-    }
-
-    // are we animating or waiting?
-    uint64_t now = millis();
-    if (now > waiting_time_top) {
-        // not waiting any more
-
-        indicator_left_x_top++;
-        indicator_left_x_top %= total_w_top;
-
-        for (uint8_t i = 0; i < INDICATOR_COUNT_TOP; i++) {
-            // has an indicator reached the centre of the screen?
-            if (indicator_info_top[i].x == indicator_left_x_top) {
-                waiting_time_top = now + indicator_info_top[i].pause_ms;
-            }
-        }
-    }
-
-    if (now > waiting_time_bottom) {
-        // not waiting any more
-
-        indicator_left_x_bottom++;
-        indicator_left_x_bottom %= total_w_bottom;
-
-        for (uint8_t i = 0; i < INDICATOR_COUNT_BOTTOM; i++) {
-            // has an indicator reached the centre of the screen?
-            if (indicator_info_bottom[i].x == indicator_left_x_bottom) {
-                waiting_time_bottom = now + indicator_info_bottom[i].pause_ms;
-            }
-        }
-    }
-
-    // erase the top canvas
-    top_canvas->fillRect(0, 0, total_w_top, IND_HEIGHT, 0);
-    // display the scrolling items in the top lane. they each check if they are in view before rendering anything
-    display_temperature(top_canvas);
-    display_wind(top_canvas);
-    display_humidity(top_canvas);
-    matrix.drawRGBBitmap(-indicator_left_x_top, CANVAS_Y_TOP, top_canvas->getBuffer(), top_canvas->width(), IND_HEIGHT);
-    if (indicator_left_x_top >= (total_w_top - SCREEN_WIDTH)) {
-        matrix.drawRGBBitmap(total_w_top - indicator_left_x_top, CANVAS_Y_TOP, top_canvas->getBuffer(), top_canvas->width(), IND_HEIGHT);
-    }
-
-    // erase the bottom canvas
-    bottom_canvas->fillRect(0, 0, total_w_bottom, IND_HEIGHT, 0);
-    // display the scrolling items in the bottom lane. they each check if they are in view before rendering anything
-    display_time(bottom_canvas);
-    display_location(bottom_canvas);
-    matrix.drawRGBBitmap(-indicator_left_x_bottom, CANVAS_Y_BOTTOM, bottom_canvas->getBuffer(), bottom_canvas->width(), IND_HEIGHT);
-    if (indicator_left_x_bottom >= (total_w_bottom - SCREEN_WIDTH)) {
-        matrix.drawRGBBitmap(total_w_bottom - indicator_left_x_bottom, CANVAS_Y_BOTTOM, bottom_canvas->getBuffer(), bottom_canvas->width(), IND_HEIGHT);
+    if (!showing_forecast) {
+        display_current_weather();
+    } else {
+        display_forecast_weather();
     }
 
     matrix.show(); // Copy data to matrix buffers
+
+    uint64_t now = millis();
+    if (now > next_swap_time) {
+        // If the screen isn't scrolling
+        if ((!showing_forecast && now < waiting_time_top && now < waiting_time_bottom) || showing_forecast) {
+            showing_forecast = !showing_forecast;
+            next_swap_time = now + SCREEN_SWAP_TIME_MS;
+            if (!showing_forecast) {
+                waiting_time_top += SCREEN_SWAP_TIME_MS;
+                waiting_time_bottom += SCREEN_SWAP_TIME_MS;
+            }
+        }
+    }
 }
