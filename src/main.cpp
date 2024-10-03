@@ -26,6 +26,7 @@ or "doublebuffer" for animation basics.
 #include <Timezone.h>
 
 #include "secrets.h"
+#include "image_tools.h"
 
 // ----------------------------------------------------------------------------------------------------------
 // LittleFS (was SPIFFS)
@@ -71,8 +72,6 @@ Adafruit_LIS3DH accel = Adafruit_LIS3DH();
 
 uint32_t prevTime = 0; // Used for frames-per-second throttle
 
-GFXcanvas16 *top_canvas, *bottom_canvas;
-
 void err(int x) {
     uint8_t i;
     pinMode(LED_BUILTIN, OUTPUT);         // Using onboard LED
@@ -100,6 +99,8 @@ const int daylightOffset_sec = 0;
 // ----------------------------------------------------------------------------------------------------------
 // #define SIMULATE_CURRENT_WEATHER_API
 // #define SIMULATE_WEATHER_FORECAST_API
+
+#include "example_json.h"
 
 #if !defined(SIMULATE_CURRENT_WEATHER_API) || !defined(SIMULATE_WEATHER_FORECAST_API)
 HTTPClient client;
@@ -140,6 +141,15 @@ String icon_names[ICON_COUNT] = {
     "13", // "snow"
     "50"  // "mist"
 };
+
+extern void DrawWeatherIcon(String icon_name, GFXcanvas16 *canvas, float t);
+// #define TEST_WEATHER_ICONS
+const uint8_t WEATHER_ICON_SCALE = 2;
+const uint8_t WEATHER_ICON_SIZE = SCREEN_HEIGHT / 2;
+const uint8_t WEATHER_ICON_CANVAS_SIZE = WEATHER_ICON_SCALE * WEATHER_ICON_SIZE;
+const uint8_t WEATHER_ICON_STEPS = 16;
+
+uint16_t *externalMemory[WEATHER_ICON_STEPS] = {0};
 
 uint8_t showing_forecast = false;
 uint8_t valid_forecasts = 0;
@@ -209,6 +219,8 @@ const uint16_t CANVAS_Y_TOP = 0, CANVAS_Y_BOTTOM = SCREEN_HEIGHT - 1 - IND_HEIGH
 
 uint16_t text_colour_565_time, text_colour_565_temperature, text_colour_565_wind;
 
+GFXcanvas16 *top_canvas, *bottom_canvas, *middle_canvas, weather_icon_canvas(WEATHER_ICON_CANVAS_SIZE, WEATHER_ICON_CANVAS_SIZE);
+
 // ----------------------------------------------------------------------------------------------------------
 // Waiting ....
 // ----------------------------------------------------------------------------------------------------------
@@ -270,33 +282,14 @@ void get_weather_icon() {
 void get_current_weather() {
     JsonDocument doc;
 #if defined(SIMULATE_CURRENT_WEATHER_API)
-    deserializeJson(
-        doc,
-        "{"
-        "\"weather\":[{\"id\":803,\"main\":\"Clouds\",\"description\":\"broken clouds\",\"icon\":\"10d\"}],"
-        "\"main\":{\"temp\":16.58,\"feels_like\":15.55,\"humidity\":48}"
-        "}");
+    deserializeJson(doc, JSON_CURRENT_WEATHER);
 #else
     Serial.printf("%s\n", CURRENT_WEATHER_URL.c_str());
     client.begin(CURRENT_WEATHER_URL);
     client.GET();
     String response = client.getString();
     Serial.printf("%s\n", response.c_str());
-
     deserializeJson(doc, response.c_str());
-
-    // {
-    //     "coord":{"lon":144.9633,"lat":-37.814},
-    //     "weather":[{"id":803,"main":"Clouds","description":"broken clouds","icon":"04n"}],
-    //     "base":"stations",
-    //     "main":{"temp":16.58,"feels_like":15.55,"temp_min":15.53,"temp_max":17.34,"pressure":1003,"humidity":48,"sea_level":1003,"grnd_level":999},
-    //     "visibility":10000,
-    //     "wind":{"speed":8.23,"deg":330,"gust":13.38},
-    //     "clouds":{"all":59},
-    //     "dt":1725094432,
-    //     "sys":{"type":2,"id":2080970,"country":"AU","sunrise":1725050610,"sunset":1725091077},
-    //     "timezone":36000,"id":2158177,"name":"Melbourne","cod":200
-    // }
 #endif
     CURRENT_TEMP = doc["main"]["temp"];
     CURRENT_WIND = doc["wind"]["speed"];
@@ -314,143 +307,14 @@ void get_weather_forecast() {
         sleep(100);
     }
 #if defined(SIMULATE_WEATHER_FORECAST_API)
-    deserializeJson(
-        doc,
-        "{"
-        "\"cod\": \"200\","
-        "\"message\": 0,"
-        "\"cnt\": 40,"
-        "\"list\": ["
-        "{"
-        "\"dt\": 1726390800,"
-        "\"main\": {"
-        "\"temp\": 11.65,"
-        "\"feels_like\": 10.46,"
-        "\"temp_min\": 10.5,"
-        "\"temp_max\": 11.65,"
-        "\"pressure\": 1034,"
-        "\"sea_level\": 1034,"
-        "\"grnd_level\": 1033,"
-        "\"humidity\": 61,"
-        "\"temp_kf\": 1.15"
-        "},"
-        "\"weather\": ["
-        "{"
-        "\"id\": 803,"
-        "\"main\": \"Clouds\","
-        "\"description\": \"broken clouds\","
-        "\"icon\": \"04n\""
-        "}"
-        "],"
-        "\"clouds\": {"
-        "\"all\": 70"
-        "},"
-        "\"wind\": {"
-        "\"speed\": 5.1,"
-        "\"deg\": 203,"
-        "\"gust\": 7.03"
-        "},"
-        "\"visibility\": 10000,"
-        "\"pop\": 0,"
-        "\"sys\": {"
-        "\"pod\": \"n\""
-        "},"
-        "\"dt_txt\": \"2024-09-15 09:00:00\""
-        "},"
-        "{"
-        "\"dt\": 1726401600,"
-        "\"main\": {"
-        "\"temp\": 10.7,"
-        "\"feels_like\": 9.47,"
-        "\"temp_min\": 8.8,"
-        "\"temp_max\": 10.7,"
-        "\"pressure\": 1034,"
-        "\"sea_level\": 1034,"
-        "\"grnd_level\": 1033,"
-        "\"humidity\": 63,"
-        "\"temp_kf\": 1.9"
-        "},"
-        "\"weather\": ["
-        "{"
-        "\"id\": 803,"
-        "\"main\": \"Clouds\","
-        "\"description\": \"broken clouds\","
-        "\"icon\": \"03d\""
-        "}"
-        "],"
-        "\"clouds\": {"
-        "\"all\": 67"
-        "},"
-        "\"wind\": {"
-        "\"speed\": 4.06,"
-        "\"deg\": 215,"
-        "\"gust\": 6.58"
-        "},"
-        "\"visibility\": 10000,"
-        "\"pop\": 0,"
-        "\"sys\": {"
-        "\"pod\": \"n\""
-        "},"
-        "\"dt_txt\": \"2024-09-15 12:00:00\""
-        "},"
-        "{"
-        "\"dt\": 1726412400,"
-        "\"main\": {"
-        "\"temp\": 10.14,"
-        "\"feels_like\": 8.91,"
-        "\"temp_min\": 9.38,"
-        "\"temp_max\": 10.14,"
-        "\"pressure\": 1033,"
-        "\"sea_level\": 1033,"
-        "\"grnd_level\": 1031,"
-        "\"humidity\": 65,"
-        "\"temp_kf\": 0.76"
-        "},"
-        "\"weather\": ["
-        "{"
-        "\"id\": 803,"
-        "\"main\": \"Clouds\","
-        "\"description\": \"broken clouds\","
-        "\"icon\": \"11d\""
-        "}"
-        "],"
-        "\"clouds\": {"
-        "\"all\": 78"
-        "},"
-        "\"wind\": {"
-        "\"speed\": 4.91,"
-        "\"deg\": 251,"
-        "\"gust\": 7.69"
-        "},"
-        "\"visibility\": 10000,"
-        "\"pop\": 0,"
-        "\"sys\": {"
-        "\"pod\": \"n\""
-        "},"
-        "\"dt_txt\": \"2024-09-15 15:00:00\""
-        "}"
-        "]");
+    deserializeJson(doc, JSON_FORECAST_WEATHER);
 #else
     Serial.printf("%s\n", FORECAST_WEATHER_URL.c_str());
     client.begin(FORECAST_WEATHER_URL);
     client.GET();
     String response = client.getString();
     Serial.printf("%s\n", response.c_str());
-
     deserializeJson(doc, response.c_str());
-
-    // {
-    //     "coord":{"lon":144.9633,"lat":-37.814},
-    //     "weather":[{"id":803,"main":"Clouds","description":"broken clouds","icon":"04n"}],
-    //     "base":"stations",
-    //     "main":{"temp":16.58,"feels_like":15.55,"temp_min":15.53,"temp_max":17.34,"pressure":1003,"humidity":48,"sea_level":1003,"grnd_level":999},
-    //     "visibility":10000,
-    //     "wind":{"speed":8.23,"deg":330,"gust":13.38},
-    //     "clouds":{"all":59},
-    //     "dt":1725094432,
-    //     "sys":{"type":2,"id":2080970,"country":"AU","sunrise":1725050610,"sunset":1725091077},
-    //     "timezone":36000,"id":2158177,"name":"Melbourne","cod":200
-    // }
 #endif
     JsonArray forecasts = doc["list"];
     uint8_t forecasts_size = forecasts.size();
@@ -538,7 +402,7 @@ void display_time(GFXcanvas16 *canvas) {
     char temp_buffer[16];
     struct tm timeinfo;
     getLocalTime(&timeinfo);
-    snprintf(temp_buffer, sizeof(temp_buffer), "%02d%c%02d", timeinfo.tm_hour, timeinfo.tm_sec % 2 ? ':' : ' ', timeinfo.tm_min);
+    snprintf(temp_buffer, sizeof(temp_buffer), "%02d%c%02d", timeinfo.tm_hour, (millis() % 1000) > 350 ? ':' : ' ', timeinfo.tm_min);
     uint16_t pixels = 3 * strlen(temp_buffer);
 
     left_x -= pixels;
@@ -660,6 +524,33 @@ void display_current_weather() {
 }
 
 // ----------------------------------------------------------------------------------------------------------
+// METHOD: Create a scaled version of a canvas/image
+// ----------------------------------------------------------------------------------------------------------
+void scale_down(uint16_t *icon_buffer, uint16_t WW, uint16_t W, uint16_t H, uint16_t *bmp, uint8_t scale) {
+    uint8_t IMG_DIVIDER = scale * scale;
+
+    memset(bmp, 0, W * H * 2);
+    for (uint8_t y = 0; y < H; y++) {
+        for (uint8_t x = 0; x < W; x++) {
+            uint16_t bmp_r = 0, bmp_g = 0, bmp_b = 0;
+            for (uint8_t j = y * scale; j < (y + 1) * scale; j++) {
+                for (uint8_t i = x * scale; i < (x + 1) * scale; i++) {
+                    uint16_t c = icon_buffer[j * WW + i];
+                    uint16_t r = (c >> 11), g = (c >> 5) & 0x3F, b = c & 0x1F;
+                    bmp_r += r;
+                    bmp_g += g;
+                    bmp_b += b;
+                }
+            }
+            bmp_r /= IMG_DIVIDER;
+            bmp_g /= IMG_DIVIDER;
+            bmp_b /= IMG_DIVIDER;
+            bmp[y * W + x] = (bmp_r << 11) | (bmp_g << 5) | bmp_b;
+        }
+    }
+}
+
+// ----------------------------------------------------------------------------------------------------------
 // METHOD: Display the icon scaled
 // ----------------------------------------------------------------------------------------------------------
 void display_scaled_icon(String icon_name, int16_t y, Adafruit_Protomatter *canvas) {
@@ -675,31 +566,14 @@ void display_scaled_icon(String icon_name, int16_t y, Adafruit_Protomatter *canv
         Serial.printf("NO MATCH! [%s]\n", icon_code.c_str());
         return;
     }
-    const uint8_t IMG_SCALE = 3, IMG_DIVIDER = IMG_SCALE * IMG_SCALE;
+
+    const uint8_t IMG_SCALE = 3;
     uint16_t W = forecast_icon->width() / IMG_SCALE, H = forecast_icon->height() / IMG_SCALE; // this will always sample LESS or EQUAL size from original
     uint16_t WW = forecast_icon->width();
 
     uint16_t bmp[W * H];
-    memset(bmp, 0, W * H * 2);
-    uint16_t *icon_buffer = forecast_icon->canvas.canvas16->getBuffer();
-    for (uint8_t y = 0; y < H; y++) {
-        for (uint8_t x = 0; x < W; x++) {
-            uint16_t bmp_r = 0, bmp_g = 0, bmp_b = 0;
-            for (uint8_t j = y * IMG_SCALE; j < (y + 1) * IMG_SCALE; j++) {
-                for (uint8_t i = x * IMG_SCALE; i < (x + 1) * IMG_SCALE; i++) {
-                    uint16_t c = icon_buffer[j * WW + i];
-                    uint16_t r = (c >> 11), g = (c >> 5) & 0x3F, b = c & 0x1F;
-                    bmp_r += r;
-                    bmp_g += g;
-                    bmp_b += b;
-                }
-            }
-            bmp_r /= IMG_DIVIDER;
-            bmp_g /= IMG_DIVIDER;
-            bmp_b /= IMG_DIVIDER;
-            bmp[y * W + x] = (bmp_r << 11) | (bmp_g << 5) | bmp_b;
-        }
-    }
+    scale_down(forecast_icon->canvas.canvas16->getBuffer(), WW, W, H, (uint16_t *)&bmp, IMG_SCALE);
+
     // matrix.drawRGBBitmap(32 - previous_icon->width() / 2, 32 - previous_icon->height() / 2, previous_icon->canvas.canvas16->getBuffer(), previous_icon->width(), previous_icon->height());
     canvas->drawRGBBitmap(14, y - 6, bmp, W, H);
 }
@@ -729,18 +603,38 @@ void display_forecast_weather() {
         // Temperature
         snprintf(temp_buffer, sizeof(temp_buffer), "%.0f", current_forecast[i].temp);
         pixels = 3 * strlen(temp_buffer);
-        left_x = 39 - pixels;
+        left_x = 38 - pixels;
         canvas->setCursor(left_x, current_y);
         canvas->setTextColor(text_colour_565_temperature);
         canvas->printf(temp_buffer);
 
+        left_x += 2 * pixels;
+        canvas->drawPixel(left_x, current_y, text_colour_565_temperature);
+        canvas->drawPixel(left_x + 1, current_y + 1, text_colour_565_temperature);
+        canvas->drawPixel(left_x + 2, current_y, text_colour_565_temperature);
+        canvas->drawPixel(left_x + 1, current_y - 1, text_colour_565_temperature);
+
         // Wind
-        snprintf(temp_buffer, sizeof(temp_buffer), "%.0f", 3.6f * current_forecast[i].wind);
-        pixels = 3 * strlen(temp_buffer);
-        left_x = 54 - pixels;
-        canvas->setCursor(left_x, current_y);
-        canvas->setTextColor(text_colour_565_wind);
-        canvas->printf(temp_buffer);
+        // snprintf(temp_buffer, sizeof(temp_buffer), "%.0f", 3.6f * current_forecast[i].wind);
+        // pixels = 3 * strlen(temp_buffer);
+        // left_x = 55 - pixels;
+        // canvas->setCursor(left_x, current_y);
+        // canvas->setTextColor(text_colour_565_wind);
+        // canvas->printf(temp_buffer);
+        left_x = 49;
+        const uint8_t bar_w = 13, colour_d = 180 / bar_w;
+        float speed_w = 0, foreacst_w = 3.6f * current_forecast[i].wind;
+        for (uint8_t i = 0; i < bar_w; i++) {
+            uint16_t bar_c = COLOR565(32, 32, 32); // default is a dark grey
+            speed_w += 3.0f;
+            if (foreacst_w > speed_w) {
+                uint8_t R = 64 + (i * colour_d);
+                uint8_t G = 64 + bar_w * colour_d - (i * colour_d);
+                bar_c = COLOR565(R, G, 64); // TO DO - choose a colour
+            }
+            canvas->drawFastVLine(left_x, current_y, 6, bar_c);
+            left_x++;
+        }
 
         current_y += FORECAST_ITEM_HEIGHT;
     }
@@ -760,6 +654,14 @@ void setup(void) {
         Serial.println("LittleFS Mount Failed");
     }
 
+    ProtomatterStatus status = matrix.begin();
+    Serial.printf("Protomatter begin() status: %d\n", status);
+    matrix.fillScreen(0x0);
+
+#if defined(TEST_WEATHER_ICONS)
+    // create the middle canvas
+    middle_canvas = new GFXcanvas16(SCREEN_WIDTH, SCREEN_HEIGHT - 16);
+#else
     Serial.println("Loading image");
     ImageReturnCode rc = img_reader.loadBMP("/loading24.bmp", img, 0.7 * 256);
     if (rc == IMAGE_SUCCESS) {
@@ -832,16 +734,6 @@ void setup(void) {
     bottom_canvas->cp437(true);
     bottom_canvas->setTextWrap(false);
 
-    ProtomatterStatus status = matrix.begin();
-    Serial.printf("Protomatter begin() status: %d\n", status);
-
-    if (!accel.begin(0x19)) {
-        Serial.println("Couldn't find accelerometer");
-        err(250); // Fast bink = I2C error
-    }
-    accel.setRange(LIS3DH_RANGE_4_G); // 2, 4, 8 or 16 G!
-
-    matrix.fillScreen(0x0);
     matrix.drawRGBBitmap(0, 16, img.canvas.canvas16->getBuffer(), SCREEN_WIDTH, 32);
     matrix.show(); // Copy data to matrix buffers
 
@@ -879,12 +771,25 @@ void setup(void) {
     waiting_time_top = millis() + indicator_info_top[0].pause_ms;
     waiting_time_bottom = millis() + indicator_info_bottom[0].pause_ms;
 
+#endif // !defined(TEST_WEATHER_ICONS)
+
+    for (uint8_t i = 0; i < WEATHER_ICON_STEPS; i++) {
+        externalMemory[i] = (uint16_t *)heap_caps_malloc(WEATHER_ICON_SIZE * WEATHER_ICON_SIZE * 2, MALLOC_CAP_SPIRAM);
+        float t = i;
+        t /= WEATHER_ICON_STEPS * 8;
+
+        DrawWeatherIcon("01d", &weather_icon_canvas, t);
+        scale_down(weather_icon_canvas.getBuffer(), WEATHER_ICON_CANVAS_SIZE, WEATHER_ICON_SIZE, WEATHER_ICON_SIZE, externalMemory[i], WEATHER_ICON_SCALE);
+    }
+
     next_swap_time = millis() + SCREEN_SWAP_TIME_MS;
 }
 
 // ==========================================================================================================
 // MAIN LOOP
 // ==========================================================================================================
+float t = 0;
+uint8_t weather_icon_index = 0;
 void loop() {
     // Limit the animation frame rate to MAX_FPS.
     // uint32_t t;
@@ -892,26 +797,31 @@ void loop() {
     //     ;
     // prevTime = t;
 
-    // Read accelerometer...
-    sensors_event_t event;
-    accel.getEvent(&event);
-    // Serial.printf("(%0.1f, %0.1f, %0.1f)\n", event.acceleration.x, event.acceleration.y, event.acceleration.z);
-
-    double xx, yy, zz;
-    xx = event.acceleration.x * 1000;
-    yy = event.acceleration.y * 1000;
-    zz = event.acceleration.z * 1000;
-
     // Clear the screen
     matrix.fillScreen(0x0);
 
+#if defined(TEST_WEATHER_ICONS)
+    // DrawWeatherIcon("01d", &weather_icon_canvas, t);
+    // t += 0.01f;
+    // if (t >= 1.0f) t -= 1.0f;
+
+    // uint16_t bmp[WEATHER_ICON_SIZE * WEATHER_ICON_SIZE];
+    // scale_down(weather_icon_canvas.getBuffer(), WEATHER_ICON_CANVAS_SIZE, WEATHER_ICON_SIZE, WEATHER_ICON_SIZE, (uint16_t *)&bmp, WEATHER_ICON_SCALE);
+
+    // // matrix.drawRGBBitmap(32 - previous_icon->width() / 2, 32 - previous_icon->height() / 2, previous_icon->canvas.canvas16->getBuffer(), previous_icon->width(), previous_icon->height());
+    // middle_canvas->drawRGBBitmap(0, 0, bmp, WEATHER_ICON_SIZE, WEATHER_ICON_SIZE);
+
+    // matrix.drawRGBBitmap(0, 16, middle_canvas->getBuffer(), middle_canvas->width(), middle_canvas->height());
+
+    matrix.drawRGBBitmap(0, 16, externalMemory[weather_icon_index], WEATHER_ICON_SIZE, WEATHER_ICON_SIZE);
+    weather_icon_index++;
+    weather_icon_index %= WEATHER_ICON_STEPS;
+#else
     if (!showing_forecast) {
         display_current_weather();
     } else {
         display_forecast_weather();
     }
-
-    matrix.show(); // Copy data to matrix buffers
 
     uint64_t now = millis();
     if (now > next_swap_time) {
@@ -925,4 +835,6 @@ void loop() {
             }
         }
     }
+#endif             // defined(TEST_WEATHER_ICONS)
+    matrix.show(); // Copy data to matrix buffers
 }
