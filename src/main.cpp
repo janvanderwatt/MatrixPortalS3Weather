@@ -72,14 +72,13 @@ Adafruit_LIS3DH accel = Adafruit_LIS3DH();
 
 uint32_t prevTime = 0; // Used for frames-per-second throttle
 
-void err(int x) {
-    uint8_t i;
-    pinMode(LED_BUILTIN, OUTPUT);         // Using onboard LED
-    for (i = 1;; i++) {                   // Loop forever...
-        digitalWrite(LED_BUILTIN, i & 1); // LED on/off blink to alert user
-        delay(x);
-    }
-}
+// ----------------------------------------------------------------------------------------------------------
+// Light sensor
+// ----------------------------------------------------------------------------------------------------------
+#define LIGHT_SENSOR_PIN A1
+#define LIGHT_SENSOR_MIN_R 500
+#define LIGHT_SENSOR_MAX_R 2500
+#define LIGHT_SENSOR_R_SERIES 1200
 
 // ----------------------------------------------------------------------------------------------------------
 // Wifi
@@ -220,6 +219,19 @@ const uint16_t CANVAS_Y_TOP = 0, CANVAS_Y_BOTTOM = SCREEN_HEIGHT - 1 - IND_HEIGH
 uint16_t text_colour_565_time, text_colour_565_temperature, text_colour_565_wind;
 
 GFXcanvas16 *top_canvas, *bottom_canvas, *middle_canvas, weather_icon_canvas(WEATHER_ICON_CANVAS_SIZE, WEATHER_ICON_CANVAS_SIZE);
+uint16_t lookup[65536];
+
+// ----------------------------------------------------------------------------------------------------------
+// Error indicator
+// ----------------------------------------------------------------------------------------------------------
+void err(int x) {
+    uint8_t i;
+    pinMode(LED_BUILTIN, OUTPUT);         // Using onboard LED
+    for (i = 1;; i++) {                   // Loop forever...
+        digitalWrite(LED_BUILTIN, i & 1); // LED on/off blink to alert user
+        delay(x);
+    }
+}
 
 // ----------------------------------------------------------------------------------------------------------
 // Waiting ....
@@ -238,6 +250,32 @@ void animate_wait(void *p) {
             matrix.show(); // Copy data to matrix buffers
         }
         delay(10);
+    }
+}
+
+// ----------------------------------------------------------------------------------------------------------
+// Light sensor reading task
+// ----------------------------------------------------------------------------------------------------------
+TaskHandle_t task_ldr;
+void light_sensor_task(void *p) {
+    const uint8_t k_bits = 3, k = (1 << k_bits) - 1;
+    analogSetAttenuation(ADC_11db);
+    uint16_t ldrValue = analogRead(LIGHT_SENSOR_PIN);
+    while (true) {
+        delay(50);
+        uint16_t newValue = analogRead(LIGHT_SENSOR_PIN);
+        ldrValue = (k * ldrValue + newValue) >> k_bits;
+        uint16_t i = 0, bri = ldrValue >> 3;
+        // Serial.printf("ldrV=[%d], bri=[%d]\n", ldrValue, bri);
+        for (uint16_t r = 0; r < 32; r++) {
+            for (uint16_t g = 0; g < 64; g++) {
+                for (uint16_t b = 0; b < 32; b++) {
+                    uint16_t rr = (r * bri) >> 8, gg = (g * bri) >> 8, bb = (b * bri) >> 8;
+                    lookup[i++] = (rr << 11) | (gg << 5) | bb;
+                }
+                yield();
+            }
+        }
     }
 }
 
@@ -331,7 +369,7 @@ void get_weather_forecast() {
         Serial.printf("-- FORECAST[%d]=[%02dH:%.1fC, %.1fm/s, %s]\n", i, current_forecast[i].hour, current_forecast[i].temp, current_forecast[i].wind, current_forecast[i].icon.c_str());
     }
 
-    showing_forecast = true;
+    // showing_forecast = true;
 }
 
 TaskHandle_t task_weather;
@@ -451,7 +489,7 @@ void display_current_weather() {
                 r0 = ((r0 * k0 + r1 * k1) >> icon_bits) << 11;
                 g0 = ((g0 * k0 + g1 * k1) >> icon_bits) << 5;
                 b0 = (b0 * k0 + b1 * k1) >> icon_bits;
-                bmp[y * W + x + 1] = r0 | g0 | b0;
+                bmp[y * W + x + 1] = lookup[r0 | g0 | b0];
             }
         }
         // matrix.drawRGBBitmap(32 - previous_icon->width() / 2, 32 - previous_icon->height() / 2, previous_icon->canvas.canvas16->getBuffer(), previous_icon->width(), previous_icon->height());
@@ -625,7 +663,7 @@ void display_forecast_weather() {
         const uint8_t bar_w = 13, colour_d = 180 / bar_w;
         float speed_w = 0, foreacst_w = 3.6f * current_forecast[i].wind;
         for (uint8_t i = 0; i < bar_w; i++) {
-            uint16_t bar_c = COLOR565(32, 32, 32); // default is a dark grey
+            uint16_t bar_c = COLOR565(16, 16, 16); // default is a dark grey
             speed_w += 3.0f;
             if (foreacst_w > speed_w) {
                 uint8_t R = 64 + (i * colour_d);
@@ -738,6 +776,7 @@ void setup(void) {
     matrix.show(); // Copy data to matrix buffers
 
     xTaskCreatePinnedToCore(animate_wait, "animate", 4096, NULL, 2, &task_animate, 0);
+    xTaskCreatePinnedToCore(light_sensor_task, "ldr", 4096, NULL, 2, &task_ldr, 0);
     delay(1000);
 
     // attempt to connect to Wifi network:
@@ -823,18 +862,18 @@ void loop() {
         display_forecast_weather();
     }
 
-    uint64_t now = millis();
-    if (now > next_swap_time) {
-        // If the screen isn't scrolling
-        if ((!showing_forecast && now < waiting_time_top && now < waiting_time_bottom) || showing_forecast) {
-            showing_forecast = !showing_forecast;
-            next_swap_time = now + SCREEN_SWAP_TIME_MS;
-            if (!showing_forecast) {
-                waiting_time_top += SCREEN_SWAP_TIME_MS;
-                waiting_time_bottom += SCREEN_SWAP_TIME_MS;
-            }
-        }
-    }
+    // uint64_t now = millis();
+    // if (now > next_swap_time) {
+    //     // If the screen isn't scrolling
+    //     if ((!showing_forecast && now < waiting_time_top && now < waiting_time_bottom) || showing_forecast) {
+    //         showing_forecast = !showing_forecast;
+    //         next_swap_time = now + SCREEN_SWAP_TIME_MS;
+    //         if (!showing_forecast) {
+    //             waiting_time_top += SCREEN_SWAP_TIME_MS;
+    //             waiting_time_bottom += SCREEN_SWAP_TIME_MS;
+    //         }
+    //     }
+    // }
 #endif             // defined(TEST_WEATHER_ICONS)
     matrix.show(); // Copy data to matrix buffers
 }
