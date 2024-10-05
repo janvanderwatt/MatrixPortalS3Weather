@@ -65,7 +65,7 @@ uint8_t oePin = 14;
 #endif
 
 Adafruit_Protomatter matrix(
-    SCREEN_WIDTH, 5, 1, rgbPins, NUM_ADDR_PINS, addrPins,
+    SCREEN_WIDTH, 4, 1, rgbPins, NUM_ADDR_PINS, addrPins,
     clockPin, latchPin, oePin, true);
 
 Adafruit_LIS3DH accel = Adafruit_LIS3DH();
@@ -254,6 +254,17 @@ void animate_wait(void *p) {
 }
 
 // ----------------------------------------------------------------------------------------------------------
+// Dim a 16-bit canvas into the provided buffer
+// ----------------------------------------------------------------------------------------------------------
+void dimCanvas16(const GFXcanvas16 *canvas16, uint16_t *buffer) {
+    uint16_t *source = canvas16->getBuffer();
+    uint32_t N = canvas16->width() * canvas16->height();
+    for (uint32_t ti = 0; ti < N; ti++) {
+        (*buffer++) = lookup[(*source++)];
+    }
+}
+
+// ----------------------------------------------------------------------------------------------------------
 // Light sensor reading task
 // ----------------------------------------------------------------------------------------------------------
 TaskHandle_t task_ldr;
@@ -266,6 +277,7 @@ void light_sensor_task(void *p) {
         uint16_t newValue = analogRead(LIGHT_SENSOR_PIN);
         ldrValue = (k * ldrValue + newValue) >> k_bits;
         uint16_t i = 0, bri = ldrValue >> 3;
+        if (bri > 256) bri = 256;
         // Serial.printf("ldrV=[%d], bri=[%d]\n", ldrValue, bri);
         for (uint16_t r = 0; r < 32; r++) {
             for (uint16_t g = 0; g < 64; g++) {
@@ -545,9 +557,12 @@ void display_current_weather() {
     display_temperature(top_canvas);
     display_wind(top_canvas);
     display_humidity(top_canvas);
-    matrix.drawRGBBitmap(-indicator_left_x_top, CANVAS_Y_TOP, top_canvas->getBuffer(), top_canvas->width(), IND_HEIGHT);
+    uint16_t temp_top[total_w_top * IND_HEIGHT];
+    dimCanvas16(top_canvas, (uint16_t *)&temp_top);
+
+    matrix.drawRGBBitmap(-indicator_left_x_top, CANVAS_Y_TOP, (uint16_t *)&temp_top, total_w_top, IND_HEIGHT);
     if (indicator_left_x_top >= (total_w_top - SCREEN_WIDTH)) {
-        matrix.drawRGBBitmap(total_w_top - indicator_left_x_top, CANVAS_Y_TOP, top_canvas->getBuffer(), top_canvas->width(), IND_HEIGHT);
+        matrix.drawRGBBitmap(total_w_top - indicator_left_x_top, CANVAS_Y_TOP, (uint16_t *)&temp_top, total_w_top, IND_HEIGHT);
     }
 
     // erase the bottom canvas
@@ -555,9 +570,11 @@ void display_current_weather() {
     // display the scrolling items in the bottom lane. they each check if they are in view before rendering anything
     display_time(bottom_canvas);
     display_location(bottom_canvas);
-    matrix.drawRGBBitmap(-indicator_left_x_bottom, CANVAS_Y_BOTTOM, bottom_canvas->getBuffer(), bottom_canvas->width(), IND_HEIGHT);
+    uint16_t temp_bottom[total_w_bottom * IND_HEIGHT];
+    dimCanvas16(bottom_canvas, (uint16_t *)&temp_bottom);
+    matrix.drawRGBBitmap(-indicator_left_x_bottom, CANVAS_Y_BOTTOM, (uint16_t *)&temp_bottom, total_w_bottom, IND_HEIGHT);
     if (indicator_left_x_bottom >= (total_w_bottom - SCREEN_WIDTH)) {
-        matrix.drawRGBBitmap(total_w_bottom - indicator_left_x_bottom, CANVAS_Y_BOTTOM, bottom_canvas->getBuffer(), bottom_canvas->width(), IND_HEIGHT);
+        matrix.drawRGBBitmap(total_w_bottom - indicator_left_x_bottom, CANVAS_Y_BOTTOM, (uint16_t *)&temp_bottom, total_w_bottom, IND_HEIGHT);
     }
 }
 
@@ -583,7 +600,7 @@ void scale_down(uint16_t *icon_buffer, uint16_t WW, uint16_t W, uint16_t H, uint
             bmp_r /= IMG_DIVIDER;
             bmp_g /= IMG_DIVIDER;
             bmp_b /= IMG_DIVIDER;
-            bmp[y * W + x] = (bmp_r << 11) | (bmp_g << 5) | bmp_b;
+            bmp[y * W + x] = lookup[(bmp_r << 11) | (bmp_g << 5) | bmp_b];
         }
     }
 }
@@ -635,7 +652,7 @@ void display_forecast_weather() {
         pixels = 3 * strlen(temp_buffer);
         left_x = 6 - pixels;
         canvas->setCursor(left_x, current_y);
-        canvas->setTextColor(text_colour_565_time);
+        canvas->setTextColor(lookup[text_colour_565_time]);
         canvas->printf(temp_buffer);
 
         // Temperature
@@ -643,14 +660,14 @@ void display_forecast_weather() {
         pixels = 3 * strlen(temp_buffer);
         left_x = 38 - pixels;
         canvas->setCursor(left_x, current_y);
-        canvas->setTextColor(text_colour_565_temperature);
+        canvas->setTextColor(lookup[text_colour_565_temperature]);
         canvas->printf(temp_buffer);
 
         left_x += 2 * pixels;
-        canvas->drawPixel(left_x, current_y, text_colour_565_temperature);
-        canvas->drawPixel(left_x + 1, current_y + 1, text_colour_565_temperature);
-        canvas->drawPixel(left_x + 2, current_y, text_colour_565_temperature);
-        canvas->drawPixel(left_x + 1, current_y - 1, text_colour_565_temperature);
+        canvas->drawPixel(left_x, current_y, lookup[text_colour_565_temperature]);
+        canvas->drawPixel(left_x + 1, current_y + 1, lookup[text_colour_565_temperature]);
+        canvas->drawPixel(left_x + 2, current_y, lookup[text_colour_565_temperature]);
+        canvas->drawPixel(left_x + 1, current_y - 1, lookup[text_colour_565_temperature]);
 
         // Wind
         // snprintf(temp_buffer, sizeof(temp_buffer), "%.0f", 3.6f * current_forecast[i].wind);
@@ -668,7 +685,7 @@ void display_forecast_weather() {
             if (foreacst_w > speed_w) {
                 uint8_t R = 64 + (i * colour_d);
                 uint8_t G = 64 + bar_w * colour_d - (i * colour_d);
-                bar_c = COLOR565(R, G, 64); // TO DO - choose a colour
+                bar_c = lookup[COLOR565(R, G, 64)]; // TO DO - choose a colour
             }
             canvas->drawFastVLine(left_x, current_y, 6, bar_c);
             left_x++;
@@ -862,18 +879,18 @@ void loop() {
         display_forecast_weather();
     }
 
-    // uint64_t now = millis();
-    // if (now > next_swap_time) {
-    //     // If the screen isn't scrolling
-    //     if ((!showing_forecast && now < waiting_time_top && now < waiting_time_bottom) || showing_forecast) {
-    //         showing_forecast = !showing_forecast;
-    //         next_swap_time = now + SCREEN_SWAP_TIME_MS;
-    //         if (!showing_forecast) {
-    //             waiting_time_top += SCREEN_SWAP_TIME_MS;
-    //             waiting_time_bottom += SCREEN_SWAP_TIME_MS;
-    //         }
-    //     }
-    // }
+    uint64_t now = millis();
+    if (now > next_swap_time) {
+        // If the screen isn't scrolling
+        if ((!showing_forecast && now < waiting_time_top && now < waiting_time_bottom) || showing_forecast) {
+            showing_forecast = !showing_forecast;
+            next_swap_time = now + SCREEN_SWAP_TIME_MS;
+            if (!showing_forecast) {
+                waiting_time_top += SCREEN_SWAP_TIME_MS;
+                waiting_time_bottom += SCREEN_SWAP_TIME_MS;
+            }
+        }
+    }
 #endif             // defined(TEST_WEATHER_ICONS)
     matrix.show(); // Copy data to matrix buffers
 }
