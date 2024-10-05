@@ -11,6 +11,7 @@ public:
   ~GFXcanvas24b(void);
   void setBrightness(uint8_t brightness);
   void drawPixel(int16_t x, int16_t y, RGB24 color);
+  void drawPixel(int16_t x, int16_t y, uint16_t color);
   void fillScreen(RGB24 color);
   void byteSwap(void);
   void drawFastVLine(int16_t x, int16_t y, int16_t h, RGB24 color);

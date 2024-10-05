@@ -51,6 +51,22 @@ void GFXcanvas24b::adjustColorBrightness(RGB24 &color) {
     @brief  Draw a pixel to the canvas framebuffer
     @param  x   x coordinate
     @param  y   y coordinate
+    @param  color  16-bit 5-6-5 Color to draw line with
+*/
+/**************************************************************************/
+void GFXcanvas24b::drawPixel(int16_t x, int16_t y, uint16_t color) {
+    RGB24 c;
+    c.r = color >> 11;
+    c.g = (color >> 5) & 0x3F;
+    c.b = color & 0x1F;
+    drawPixel(x, y, c);
+}
+
+/**************************************************************************/
+/*!
+    @brief  Draw a pixel to the canvas framebuffer
+    @param  x   x coordinate
+    @param  y   y coordinate
     @param  color  24-bit RGB Color to draw line with
 */
 /**************************************************************************/
