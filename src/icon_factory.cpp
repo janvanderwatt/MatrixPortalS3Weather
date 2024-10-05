@@ -39,8 +39,8 @@ void DrawWeatherIcon(String icon_name, GFXcanvas16 *canvas, float t) {
         .canvas = canvas,
         .w = canvas->width(),
         .h = canvas->height(),
-        .cx = canvas->width() / 2,
-        .cy = canvas->height() / 2,
+        .cx = (int16_t)(canvas->width() >> 1),
+        .cy = (int16_t)(canvas->height() >> 1),
         .daytime = daytime,
         .t = t};
     memset(canvas->getBuffer(), 0, info.w * info.h * 2);
