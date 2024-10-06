@@ -65,7 +65,7 @@ uint8_t oePin = 14;
 #endif
 
 Adafruit_Protomatter matrix(
-    SCREEN_WIDTH, 4, 1, rgbPins, NUM_ADDR_PINS, addrPins,
+    SCREEN_WIDTH, 5, 1, rgbPins, NUM_ADDR_PINS, addrPins,
     clockPin, latchPin, oePin, true);
 
 Adafruit_LIS3DH accel = Adafruit_LIS3DH();
@@ -114,7 +114,7 @@ String openweather_token = OPENWEATHER_TOKEN;
 String UNITS = "metric"; // can pick 'imperial' or 'metric' as part of URL query
 const uint32_t WEATHER_INTERVAL_MIN = 10;
 
-const uint32_t SCREEN_SWAP_TIME_MS = 10 * 1000;
+const uint32_t CURRENT_WEATHER_DISPLAY_TIME_MS = 30 * 1000, FORECAST_WEATHER_DISPLAY_TIME_MS = 10 * 1000;
 uint64_t next_swap_time = 0;
 
 float CURRENT_TEMP, CURRENT_WIND, CURRENT_HUMIDITY;
@@ -150,7 +150,7 @@ const uint8_t WEATHER_ICON_STEPS = 16;
 
 uint16_t *externalMemory[WEATHER_ICON_STEPS] = {0};
 
-uint8_t showing_forecast = false;
+uint8_t showing_forecast = true;
 uint8_t valid_forecasts = 0;
 
 struct ForecastInfo_t
@@ -276,8 +276,9 @@ void light_sensor_task(void *p) {
         delay(50);
         uint16_t newValue = analogRead(LIGHT_SENSOR_PIN);
         ldrValue = (k * ldrValue + newValue) >> k_bits;
-        uint16_t i = 0, bri = ldrValue >> 3;
+        uint16_t i = 0, bri = (ldrValue >> 3);
         if (bri > 256) bri = 256;
+        if (bri < 48) bri = 48;
         // Serial.printf("ldrV=[%d], bri=[%d]\n", ldrValue, bri);
         for (uint16_t r = 0; r < 32; r++) {
             for (uint16_t g = 0; g < 64; g++) {
@@ -353,9 +354,6 @@ void get_current_weather() {
 // ----------------------------------------------------------------------------------------------------------
 void get_weather_forecast() {
     JsonDocument doc;
-    while (showing_forecast) {
-        sleep(100);
-    }
 #if defined(SIMULATE_WEATHER_FORECAST_API)
     deserializeJson(doc, JSON_FORECAST_WEATHER);
 #else
@@ -380,8 +378,6 @@ void get_weather_forecast() {
         current_forecast[i].hour = hour(melbourneTime);
         Serial.printf("-- FORECAST[%d]=[%02dH:%.1fC, %.1fm/s, %s]\n", i, current_forecast[i].hour, current_forecast[i].temp, current_forecast[i].wind, current_forecast[i].icon.c_str());
     }
-
-    // showing_forecast = true;
 }
 
 TaskHandle_t task_weather;
@@ -630,17 +626,17 @@ void display_scaled_icon(String icon_name, int16_t y, Adafruit_Protomatter *canv
     scale_down(forecast_icon->canvas.canvas16->getBuffer(), WW, W, H, (uint16_t *)&bmp, IMG_SCALE);
 
     // matrix.drawRGBBitmap(32 - previous_icon->width() / 2, 32 - previous_icon->height() / 2, previous_icon->canvas.canvas16->getBuffer(), previous_icon->width(), previous_icon->height());
-    canvas->drawRGBBitmap(14, y - 6, bmp, W, H);
+    canvas->drawRGBBitmap(14, y - 2, bmp, W, H);
 }
 
 // ----------------------------------------------------------------------------------------------------------
 // METHOD: Display the forecast weather
 // ----------------------------------------------------------------------------------------------------------
 void display_forecast_weather() {
-    const uint16_t ITEMS_PER_SCREEN = 4;
+    const uint16_t ITEMS_PER_SCREEN = 6;
     const int16_t FORECAST_ITEM_HEIGHT = SCREEN_HEIGHT / ITEMS_PER_SCREEN;
     char temp_buffer[16];
-    int16_t pixels, left_x, current_y = 7;
+    int16_t pixels, left_x, current_y = 1 + (SCREEN_HEIGHT - ITEMS_PER_SCREEN * FORECAST_ITEM_HEIGHT) / 2;
 
     Adafruit_Protomatter *canvas = &matrix;
 
@@ -648,9 +644,9 @@ void display_forecast_weather() {
         display_scaled_icon(current_forecast[i].icon, current_y, canvas);
 
         // Time
-        snprintf(temp_buffer, sizeof(temp_buffer), "%02d", current_forecast[i].hour);
+        snprintf(temp_buffer, sizeof(temp_buffer), "%2d", current_forecast[i].hour);
         pixels = 3 * strlen(temp_buffer);
-        left_x = 6 - pixels;
+        left_x = 7 - pixels;
         canvas->setCursor(left_x, current_y);
         canvas->setTextColor(lookup[text_colour_565_time]);
         canvas->printf(temp_buffer);
@@ -838,7 +834,7 @@ void setup(void) {
         scale_down(weather_icon_canvas.getBuffer(), WEATHER_ICON_CANVAS_SIZE, WEATHER_ICON_SIZE, WEATHER_ICON_SIZE, externalMemory[i], WEATHER_ICON_SCALE);
     }
 
-    next_swap_time = millis() + SCREEN_SWAP_TIME_MS;
+    next_swap_time = millis() + showing_forecast ? FORECAST_WEATHER_DISPLAY_TIME_MS : CURRENT_WEATHER_DISPLAY_TIME_MS;
 }
 
 // ==========================================================================================================
@@ -881,15 +877,20 @@ void loop() {
 
     uint64_t now = millis();
     if (now > next_swap_time) {
-        // If the screen isn't scrolling
-        if ((!showing_forecast && now < waiting_time_top && now < waiting_time_bottom) || showing_forecast) {
-            showing_forecast = !showing_forecast;
-            next_swap_time = now + SCREEN_SWAP_TIME_MS;
-            if (!showing_forecast) {
-                waiting_time_top += SCREEN_SWAP_TIME_MS;
-                waiting_time_bottom += SCREEN_SWAP_TIME_MS;
+        if (showing_forecast) {
+            showing_forecast = false;
+            waiting_time_top += FORECAST_WEATHER_DISPLAY_TIME_MS;
+            waiting_time_bottom += FORECAST_WEATHER_DISPLAY_TIME_MS;
+            next_swap_time = now + CURRENT_WEATHER_DISPLAY_TIME_MS;
+        } else {
+            if ((indicator_left_x_top == indicator_info_top[0].x) && (indicator_left_x_bottom == indicator_info_bottom[0].x)) {
+                if (now > (waiting_time_top - indicator_info_top[0].pause_ms + 3000)) {
+                    showing_forecast = true;
+                    next_swap_time = now + FORECAST_WEATHER_DISPLAY_TIME_MS;
+                }
             }
         }
+        // If the screen isn't scrolling
     }
 #endif             // defined(TEST_WEATHER_ICONS)
     matrix.show(); // Copy data to matrix buffers
