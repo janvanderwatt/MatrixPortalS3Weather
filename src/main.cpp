@@ -90,7 +90,8 @@ char pass[] = WIFI_PASSWORD;
 // Time
 // ----------------------------------------------------------------------------------------------------------
 const char *ntpServer = "pool.ntp.org";
-const long gmtOffset_sec = 10 * 3600L;
+// const long gmtOffset_sec = 10 * 3600L;
+const long gmtOffset_sec = 0 * 3600L; // Get UTC time - conversion to DST is done using utilities
 const int daylightOffset_sec = 0;
 
 // ----------------------------------------------------------------------------------------------------------
@@ -445,10 +446,12 @@ void display_humidity(GFXcanvas16 *canvas) {
 void display_time(GFXcanvas16 *canvas) {
     uint8_t indicator_index = (uint8_t)IndTime, left_x = SCREEN_WIDTH / 2 + indicator_info_bottom[indicator_index].x;
 
+    // Convert UTC time to Melbourne time
     char temp_buffer[16];
-    struct tm timeinfo;
-    getLocalTime(&timeinfo);
-    snprintf(temp_buffer, sizeof(temp_buffer), "%02d%c%02d", timeinfo.tm_hour, (millis() % 1000) > 350 ? ':' : ' ', timeinfo.tm_min);
+    time_t now;
+    time(&now);
+    time_t melbourneTime = Melbourne.toLocal(now);
+    snprintf(temp_buffer, sizeof(temp_buffer), "%02d%c%02d", hour(melbourneTime), (millis() % 1000) > 350 ? ':' : ' ', minute(melbourneTime));
     uint16_t pixels = 3 * strlen(temp_buffer);
 
     left_x -= pixels;
